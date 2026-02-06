@@ -1,0 +1,67 @@
+#ifndef NCNN_INCLUDE_GUARD___sr_id_h
+#define NCNN_INCLUDE_GUARD___sr_id_h
+namespace sr_param_id {
+const int LAYER_data = 0;
+const int BLOB_data = 0;
+const int LAYER_splitncnn_0 = 1;
+const int BLOB_data_splitncnn_0 = 1;
+const int BLOB_data_splitncnn_1 = 2;
+const int LAYER_conv0 = 2;
+const int BLOB_conv0 = 3;
+const int LAYER_conv0_lrelu = 3;
+const int BLOB_conv0_conv0_lrelu = 4;
+const int LAYER_splitncnn_1 = 4;
+const int BLOB_conv0_conv0_lrelu_splitncnn_0 = 5;
+const int BLOB_conv0_conv0_lrelu_splitncnn_1 = 6;
+const int LAYER_db1_reduce = 5;
+const int BLOB_db1_reduce = 7;
+const int LAYER_db1_reduce_lrelu = 6;
+const int BLOB_db1_reduce_db1_reduce_lrelu = 8;
+const int LAYER_db1_3x3 = 7;
+const int BLOB_db1_3x3 = 9;
+const int LAYER_db1_3x3_lrelu = 8;
+const int BLOB_db1_3x3_db1_3x3_lrelu = 10;
+const int LAYER_db1_1x1 = 9;
+const int BLOB_db1_1x1 = 11;
+const int LAYER_db1_1x1_lrelu = 10;
+const int BLOB_db1_1x1_db1_1x1_lrelu = 12;
+const int LAYER_db1_concat = 11;
+const int BLOB_db1_concat = 13;
+const int LAYER_splitncnn_2 = 12;
+const int BLOB_db1_concat_splitncnn_0 = 14;
+const int BLOB_db1_concat_splitncnn_1 = 15;
+const int LAYER_db2_reduce = 13;
+const int BLOB_db2_reduce = 16;
+const int LAYER_db2_reduce_lrelu = 14;
+const int BLOB_db2_reduce_db2_reduce_lrelu = 17;
+const int LAYER_db2_3x3 = 15;
+const int BLOB_db2_3x3 = 18;
+const int LAYER_db2_3x3_lrelu = 16;
+const int BLOB_db2_3x3_db2_3x3_lrelu = 19;
+const int LAYER_db2_1x1 = 17;
+const int BLOB_db2_1x1 = 20;
+const int LAYER_db2_1x1_lrelu = 18;
+const int BLOB_db2_1x1_db2_1x1_lrelu = 21;
+const int LAYER_db2_concat = 19;
+const int BLOB_db2_concat = 22;
+const int LAYER_upsample_reduce = 20;
+const int BLOB_upsample_reduce = 23;
+const int LAYER_upsample_reduce_lrelu = 21;
+const int BLOB_upsample_reduce_upsample_reduce_lrelu = 24;
+const int LAYER_upsample_deconv = 22;
+const int BLOB_upsample_deconv = 25;
+const int LAYER_upsample_lrelu = 23;
+const int BLOB_upsample_deconv_upsample_lrelu = 26;
+const int LAYER_upsample_rec = 24;
+const int BLOB_upsample_rec = 27;
+const int LAYER_splitncnn_3 = 25;
+const int BLOB_upsample_rec_splitncnn_0 = 28;
+const int BLOB_upsample_rec_splitncnn_1 = 29;
+const int LAYER_nearest = 26;
+const int BLOB_nearest = 30;
+const int LAYER_Crop1 = 27;
+const int BLOB_Crop1 = 31;
+const int LAYER_fc = 28;
+const int BLOB_fc = 32;
+} // namespace sr_param_id
+#endif // NCNN_INCLUDE_GUARD___sr_id_h

@@ -1,0 +1,40 @@
+# IDEs
+.idea/
+.vscode/
+.vs/
+*.user
+*.suo
+*.opensdf
+*.sdf
+
+# OS
+.DS_Store
+Thumbs.db
+
+# CMake Build Directories
+cmake-build-*/
+build/
+out/
+bin/
+
+# Android
+local.properties
+.gradle/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Python
+__pycache__/
+*.pyc
+
+# Unity - we might want to ignore Library/Temp/Obj in the unity project folders, 
+# but usually those are inside the unity project dir. 
+# We'll add a general rule just in case.
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Mm]emoryCaptures/
