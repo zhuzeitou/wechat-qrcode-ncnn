@@ -6,6 +6,7 @@
 #endif
 
 #ifdef __cplusplus
+#include <version>
 #ifndef __cpp_lib_char8_t
 using char8_t = unsigned char;
 #endif
