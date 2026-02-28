@@ -5,17 +5,16 @@
 
 #include "zzt_qrcode/qrcode.h"
 
-static thread_local zzt_qrcode_error_t
-        last_error = ZZT_QRCODE_OK;
+static thread_local zzt_qrcode_error_t last_error = ZZT_QRCODE_OK;
 
 /**
- * 将标准 UTF-8 转换为 UTF-16 (BMP + Surrogate Pairs)
- * 处理非法序列时插入 0xFFFD 字符，并尽可能同步。
- * @param src UTF-8 输入字节流
- * @param src_len 输入长度（字节）
- * @param dst UTF-16 输出缓冲区
- * @param dst_max 输出缓冲区最大码元数
- * @return 写入 dst 的 uint16_t 数量
+ * Convert standard UTF-8 to UTF-16 (BMP + Surrogate Pairs)
+ * Insert 0xFFFD character when handling invalid sequences, and resync as much as possible.
+ * @param src UTF-8 input byte stream
+ * @param src_len Input length (bytes)
+ * @param dst UTF-16 output buffer
+ * @param dst_max Maximum code units in output buffer
+ * @return Number of uint16_t written to dst
  */
 static int utf8_to_utf16(const char8_t *src, int src_len, char16_t *dst, int dst_max) {
     if (!src || src_len <= 0 || !dst || dst_max <= 0) return 0;
@@ -42,19 +41,19 @@ static int utf8_to_utf16(const char8_t *src, int src_len, char16_t *dst, int dst
             cp = b & 0x07;
             len = 4;
         } else {
-            // 非法首字节
+            // Invalid start byte
             dst[out++] = 0xFFFD;
             i++;
             continue;
         }
 
         if (i + len > src_len) {
-            // 不完整序列
+            // Incomplete sequence
             dst[out++] = 0xFFFD;
             break;
         }
 
-        // 拼接后续字节
+        // Concatenate continuation bytes
         int valid = 1;
         for (int j = 1; j < len; j++) {
             if ((src[i + j] & 0xC0) != 0x80) {
@@ -66,11 +65,11 @@ static int utf8_to_utf16(const char8_t *src, int src_len, char16_t *dst, int dst
 
         if (!valid) {
             dst[out++] = 0xFFFD;
-            i++; // 仅跳过错误的首字节，尝试在下一个字节同步
+            i++; // Skip only the invalid start byte, try to resync at next byte
             continue;
         }
 
-        // 检查 Overlong 编码和非法码位
+        // Check for overlong encoding and invalid code points
         if ((len == 2 && cp < 0x80) ||
             (len == 3 && cp < 0x800) ||
             (len == 4 && cp < 0x10000) ||
@@ -81,17 +80,17 @@ static int utf8_to_utf16(const char8_t *src, int src_len, char16_t *dst, int dst
             continue;
         }
 
-        // 写入结果
+        // Write result
         if (cp <= 0xFFFF) {
             dst[out++] = (uint16_t) cp;
         } else {
-            // 需要代理对
+            // Surrogate pair needed
             if (out + 1 < dst_max) {
                 cp -= 0x10000;
                 dst[out++] = (uint16_t) (0xD800 | (cp >> 10));
                 dst[out++] = (uint16_t) (0xDC00 | (cp & 0x3FF));
             } else {
-                // 空间不足写入代理对，停止转换
+                // Insufficient space for surrogate pair, stop conversion
                 break;
             }
         }
@@ -112,8 +111,7 @@ void zzt_qrcode_release_detector_jni(JNIEnv *env, jclass clazz, jlong native_det
     last_error = zzt_qrcode_release_detector((zzt_qrcode_detector_h) native_detector);
 }
 
-jlong zzt_qrcode_detect_and_decode_path_jni(JNIEnv *env, jclass clazz, jlong native_detector,
-                                            jstring path) {
+jlong zzt_qrcode_detect_and_decode_path_jni(JNIEnv *env, jclass clazz, jlong native_detector, jstring path) {
     if (path == NULL) {
         last_error = ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
         return 0;
@@ -134,8 +132,7 @@ jlong zzt_qrcode_detect_and_decode_path_jni(JNIEnv *env, jclass clazz, jlong nat
     return (jlong) result;
 }
 
-jlong zzt_qrcode_detect_and_decode_data_jni(JNIEnv *env, jclass clazz, jlong native_detector,
-                                            jbyteArray data) {
+jlong zzt_qrcode_detect_and_decode_data_jni(JNIEnv *env, jclass clazz, jlong native_detector, jbyteArray data) {
     if (data == NULL) {
         last_error = ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
         return 0;
@@ -252,8 +249,7 @@ jstring zzt_qrcode_get_result_text_jni(JNIEnv *env, jclass clazz, jlong native_r
     jstring result = NULL;
 
     int len = 0;
-    last_error = zzt_qrcode_get_result_text((zzt_qrcode_result_h) native_result, index,
-                                            NULL, &len);
+    last_error = zzt_qrcode_get_result_text((zzt_qrcode_result_h) native_result, index, NULL, &len);
     if (last_error == ZZT_QRCODE_OK && len > 0) {
         char *text = malloc(sizeof(char) * len);
         if (text == NULL) {
@@ -261,8 +257,7 @@ jstring zzt_qrcode_get_result_text_jni(JNIEnv *env, jclass clazz, jlong native_r
             return NULL;
         }
         memset(text, 0, sizeof(char) * len);
-        last_error = zzt_qrcode_get_result_text((zzt_qrcode_result_h) native_result, index,
-                                                text, &len);
+        last_error = zzt_qrcode_get_result_text((zzt_qrcode_result_h) native_result, index, text, &len);
         if (last_error == ZZT_QRCODE_OK && len > 0) {
             const char8_t *text_u8 = (const char8_t *) text;
             char16_t *text_u16 = malloc(sizeof(char16_t) * len);
@@ -285,8 +280,7 @@ zzt_qrcode_get_result_points_jni(JNIEnv *env, jclass clazz, jlong native_result,
     jobjectArray points_array = NULL;
 
     int len = 0;
-    last_error = zzt_qrcode_get_result_points((zzt_qrcode_result_h) native_result, index,
-                                              NULL, &len);
+    last_error = zzt_qrcode_get_result_points((zzt_qrcode_result_h) native_result, index, NULL, &len);
     if (last_error == ZZT_QRCODE_OK && len > 0) {
         float *points = malloc(sizeof(float) * len);
         if (points == NULL) {
@@ -294,9 +288,7 @@ zzt_qrcode_get_result_points_jni(JNIEnv *env, jclass clazz, jlong native_result,
             return NULL;
         }
         memset(points, 0, sizeof(float) * len);
-        last_error = zzt_qrcode_get_result_points((zzt_qrcode_result_h) native_result,
-                                                  index, points,
-                                                  &len);
+        last_error = zzt_qrcode_get_result_points((zzt_qrcode_result_h) native_result, index, points, &len);
         if (last_error == ZZT_QRCODE_OK && len > 0) {
             jclass cls = (*env)->FindClass(env, "[F");
             points_array = (*env)->NewObjectArray(env, (jsize) len / 2, cls, NULL);
