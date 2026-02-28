@@ -4,7 +4,7 @@
   "displayName": "WeChat QRCode NCNN",
   "description": "Port of WeChat QRCode based on NCNN for Unity. Supports detecting multiple QRCodes.",
   "unity": "2021.3",
-  "documentationUrl": "https://github.com/your-repo/wechat-qrcode-ncnn",
+  "documentationUrl": "https://github.com/zhuzeitou/wechat-qrcode-ncnn",
   "dependencies": {},
   "keywords": [
     "qrcode",
@@ -15,6 +15,6 @@
   "author": {
     "name": "zhuzeitou",
     "email": "zhuzeitou@gmail.com",
-    "url": "https://github.com/Startcode"
+    "url": "https://github.com/zhuzeitou"
   }
 }
