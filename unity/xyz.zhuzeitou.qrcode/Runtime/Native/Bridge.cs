@@ -38,12 +38,10 @@ namespace ZZT.QRCode.Native
         [DllImport(DLLName, EntryPoint = "zzt_qrcode_detect_and_decode_data")]
         internal static extern int DetectAndDecode(NativeDetector detector, in byte data, int dataLen,
             out NativeResult resultPtr);
-        
-        // [DllImport(DLLName, EntryPoint = "zzt_qrcode_detect_and_decode_path_u8", CharSet = CharSet.Ansi)]
-        // internal static extern int DetectAndDecode(NativeDetector detector, [MarshalAs(UnmanagedType.LPUTF8Str)] string path, out NativeResult result);
 
-        [DllImport(DLLName, EntryPoint = "zzt_qrcode_detect_and_decode_path_u16", CharSet = CharSet.Unicode)]
-        internal static extern int DetectAndDecode(NativeDetector detector, string path, out NativeResult result);
+        [DllImport(DLLName, EntryPoint = "zzt_qrcode_detect_and_decode_path_u16")]
+        internal static extern int DetectAndDecode(NativeDetector detector,
+            [MarshalAs(UnmanagedType.LPWStr)] string path, out NativeResult result);
 
         [DllImport(DLLName, EntryPoint = "zzt_qrcode_detect_and_decode_pixels")]
         internal static extern int DetectAndDecode(NativeDetector detector, in byte pixels, int format, int width,
