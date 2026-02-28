@@ -1,10 +1,6 @@
 ﻿#ifndef ZZT_QRCODE_H
 #define ZZT_QRCODE_H
 
-#ifdef __ANDROID__
-#include <jni.h>
-#endif
-
 #ifdef __cplusplus
 #include <version>
 #ifndef __cpp_lib_char8_t
