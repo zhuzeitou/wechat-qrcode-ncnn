@@ -101,12 +101,7 @@ zzt_qrcode_detect_and_decode_path_u8(zzt_qrcode_detector_h detector, const char8
 #else
     std::filesystem::path fs_path = std::filesystem::u8path(reinterpret_cast<const char*>(path));
 #endif
-    std::ifstream is(fs_path, std::ios::binary);
-    if (!is) {
-        return ZZT_QRCODE_ERROR_DECODE_FAILED;
-    }
-    std::vector<unsigned char> bytes((std::istreambuf_iterator(is)), std::istreambuf_iterator<char>());
-    cv::Mat img = cv::imdecode(bytes, cv::IMREAD_GRAYSCALE);
+    cv::Mat img = cv::imread(fs_path.string(), cv::IMREAD_GRAYSCALE);
     return qrcode_detect_and_decode_internal(detector, img, out_result);
 }
 
@@ -123,12 +118,7 @@ zzt_qrcode_detect_and_decode_path_u16(zzt_qrcode_detector_h detector, const char
     }
 
     std::filesystem::path fs_path(path);
-    std::ifstream is(fs_path, std::ios::binary);
-    if (!is) {
-        return ZZT_QRCODE_ERROR_DECODE_FAILED;
-    }
-    std::vector<unsigned char> bytes((std::istreambuf_iterator(is)), std::istreambuf_iterator<char>());
-    cv::Mat img = cv::imdecode(bytes, cv::IMREAD_GRAYSCALE);
+    cv::Mat img = cv::imread(fs_path.string(), cv::IMREAD_GRAYSCALE);
     return qrcode_detect_and_decode_internal(detector, img, out_result);
 }
 
