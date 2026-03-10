@@ -24,14 +24,14 @@ int main(int argc, char *argv[]) {
 #ifdef _WIN32
         int u16_size = MultiByteToWideChar(CP_ACP, 0, LPSTR(path), -1, nullptr, 0);
         std::vector<char16_t> path_u16(u16_size + 1, 0);
-        MultiByteToWideChar(CP_ACP, 0, LPSTR(path), -1, LPWSTR(&path_u16[0]), u16_size);
-        int u8_size = WideCharToMultiByte(CP_UTF8, 0, LPWSTR(&path_u16[0]), -1, nullptr, 0, nullptr, nullptr);
+        MultiByteToWideChar(CP_ACP, 0, LPSTR(path), -1, LPWSTR(path_u16.data()), u16_size);
+        int u8_size = WideCharToMultiByte(CP_UTF8, 0, LPWSTR(path_u16.data()), -1, nullptr, 0, nullptr, nullptr);
         std::vector<char8_t> path_u8(u8_size + 1, 0);
-        WideCharToMultiByte(CP_UTF8, 0, LPWSTR(&path_u16[0]), -1, LPSTR(&path_u8[0]), u8_size, nullptr, nullptr);
+        WideCharToMultiByte(CP_UTF8, 0, LPWSTR(path_u16.data()), -1, LPSTR(path_u8.data()), u8_size, nullptr, nullptr);
 #else
         int u8_size = strlen(path);
         std::vector<char8_t> path_u8(u8_size + 1, 0);
-        std::copy(path, path + u8_size, &path_u8[0]);
+        std::copy(path, path + u8_size, path_u8.data());
 #endif
 
         std::cout << "raw:" << path << std::endl;
@@ -58,12 +58,11 @@ int main(int argc, char *argv[]) {
                 int text_buf_size = 0;
                 zzt_qrcode_error_t ret = zzt_qrcode_get_result_text(result, 0, nullptr, &text_buf_size);
                 if (ret == ZZT_QRCODE_OK && text_buf_size > 0) {
-                    char *result_text = new char[text_buf_size]{0};
-                    ret = zzt_qrcode_get_result_text(result, 0, result_text, &text_buf_size);
+                    std::vector<char> result_text(text_buf_size, 0);
+                    ret = zzt_qrcode_get_result_text(result, 0, result_text.data(), &text_buf_size);
                     if (ret == ZZT_QRCODE_OK && text_buf_size > 0) {
-                        std::cout << result_text;
+                        std::cout << result_text.data();
                     }
-                    delete[] result_text;
                 }
                 std::cout << std::endl;
             }
@@ -73,15 +72,14 @@ int main(int argc, char *argv[]) {
                 int point_len = 0;
                 zzt_qrcode_error_t ret = zzt_qrcode_get_result_points(result, 0, nullptr, &point_len);
                 if (ret == ZZT_QRCODE_OK && point_len > 0) {
-                    float *result_point = new float[point_len]{0};
-                    ret = zzt_qrcode_get_result_points(result, 0, result_point, &point_len);
+                    std::vector<float> result_point(point_len, 0);
+                    ret = zzt_qrcode_get_result_points(result, 0, result_point.data(), &point_len);
                     if (ret == ZZT_QRCODE_OK && point_len > 0) {
                         for (int j = 0; j < point_len / 2; j++) {
                             if (j != 0) std::cout << ", ";
                             std::cout << "(" << result_point[j * 2] << ", " << result_point[j * 2 + 1] << ")";
                         }
                     }
-                    delete[] result_point;
                 }
                 std::cout << "]" << std::endl;
             }
