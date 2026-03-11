@@ -22,3 +22,9 @@ include(GNUInstallDirs)
 install(TARGETS qrcodetest
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+
+if (APPLE)
+    set_target_properties(qrcodetest PROPERTIES INSTALL_RPATH "@executable_path/../lib")
+elseif (UNIX AND NOT ANDROID)
+    set_target_properties(qrcodetest PROPERTIES INSTALL_RPATH "\$ORIGIN/../lib")
+endif ()
