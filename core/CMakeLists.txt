@@ -53,7 +53,7 @@ target_compile_definitions(zzt_qrcode PRIVATE SR_USE_OPT_MODEL)
 
 target_link_libraries(zzt_qrcode PRIVATE ncnn)
 
-if (WIN32 AND NOT MSVC)
+if ((WIN32 AND NOT MSVC) OR APPLE)
     target_link_libraries(zzt_qrcode PRIVATE iconv)
 endif ()
 
