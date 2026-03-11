@@ -1,6 +1,7 @@
 # WeChat QRCode NCNN
 
 ![C++](https://img.shields.io/badge/language-C++-blue.svg)
+![macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)
 ![Android](https://img.shields.io/badge/platform-Android-green.svg)
 ![Unity](https://img.shields.io/badge/platform-Unity-black.svg)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
@@ -17,7 +18,7 @@ This makes the library significantly more lightweight and easier to integrate in
 *   **Easy Integration**: Pure C API (`extern "C"`) for seamless FFI integration across languages.
 *   **Thread-Safe**: Handle-based architecture with read-write locks ensures safe concurrent access.
 *   **Robust**: Inherits the excellent detection capabilities of WeChat QRCode for complex scenarios (blurred, small, non-standard QRCodes).
-*   **Cross-Platform**: Supports Windows, Linux, Android, and Unity (via C/C++ API).
+*   **Cross-Platform**: Supports Windows, macOS, Linux, Android, and Unity (via C/C++ API).
 
 ## Prerequisites
 
@@ -32,20 +33,23 @@ To build this project, you need:
 ## Build Instructions
 
 > **Note**: This repository does **not** provide pre-compiled binaries. You need to build the libraries from source for your target platform.
+> We strongly recommend using `cmake --install <build_dir> --prefix <output_dir>` to extract the compiled artifacts to a clean directory.
 
-### Quick Start (Core)
+### Quick Start (Standard Build)
 
-This is the standard build method, and works on **Linux** as well.
+This is the standard native build method. It works out-of-the-box for **Linux**, **macOS** (building for your current host architecture), and **Windows** (if running inside a VS Developer Command Prompt or MSYS2 environment).
 
 ```bash
 # Clone the repository with submodules
 git clone --recursive https://github.com/zhuzeitou/wechat-qrcode-ncnn.git
 cd wechat-qrcode-ncnn
 
-# standard cmake build
-mkdir build && cd build
-cmake -G Ninja -DCMAKE_BUILD_TYPE=Release ..
-cmake --build . -j 4
+# standard cmake build (uses default generator, e.g., Make, Ninja, or MSBuild)
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j 4
+
+# install artifacts (headers and library) to ./install_output
+cmake --install build --prefix ./install_output
 ```
 
 ### Windows
@@ -54,12 +58,15 @@ cmake --build . -j 4
 
 1.  Generate the solution:
     ```cmd
-    mkdir build && cd build
-    cmake -A x64 -DBUILD_TESTS=ON ..
+    cmake -B build -A x64 -DBUILD_TESTS=ON
     ```
 2.  Build via command line (or open `.sln` in VS):
     ```cmd
-    cmake --build . --config Release -j 4
+    cmake --build build --config Release -j 4
+    ```
+3.  Install artifacts:
+    ```cmd
+    cmake --install build --prefix ./install_output
     ```
 
 **Option 2: Ninja (Fast)**
@@ -67,9 +74,9 @@ cmake --build . -j 4
 1.  Open **x64 Native Tools Command Prompt for VS 20xx**.
 2.  Run the following commands:
     ```cmd
-    mkdir build && cd build
-    cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON ..
-    cmake --build . -j 4
+    cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
+    cmake --build build -j 4
+    cmake --install build --prefix ./install_output
     ```
 
 **Option 3: MSYS2 (MinGW)**
@@ -81,13 +88,38 @@ cmake --build . -j 4
     ```
 3.  Run the following commands:
     ```bash
-    mkdir build && cd build
-    cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON ..
-    cmake --build . -j 4
+    cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
+    cmake --build build -j 4
+    cmake --install build --prefix ./install_output
     ```
 
 > **Note**:
-> After the build is complete, you can find the generated library `zzt_qrcode.dll` in the build directory (usually under `Release/` or in the root depending on the generator).
+> After installation, you can find the generated library `zzt_qrcode.dll` in `install_output/bin/` and headers in `install_output/include/`. On Windows, `.dll` files are installed to the `bin/` directory alongside executables.
+
+### macOS
+
+**Important**: Do not use `-DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"` to compile a Universal Fat Library in a single CMake pass. CPU architecture detection macros for `ncnn` (like ARM NEON and Intel AVX) will fail during the CMake configure stage, resulting in the loss of all hardware-accelerated optimizations. 
+
+Instead, configure, build, and install each architecture separately, then merge them using `lipo`:
+
+```bash
+# 1. Build and install for x86_64
+cmake -B build-mac-x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="x86_64"
+cmake --build build-mac-x86_64 -j 4
+cmake --install build-mac-x86_64 --prefix ./install_mac/x86_64
+
+# 2. Build and install for arm64 (Apple Silicon)
+cmake -B build-mac-arm64 -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64"
+cmake --build build-mac-arm64 -j 4
+cmake --install build-mac-arm64 --prefix ./install_mac/arm64
+
+# 3. Create a Universal Fat Library
+mkdir -p ./install_mac/universal/lib
+lipo -create \
+    ./install_mac/x86_64/lib/libzzt_qrcode.dylib \
+    ./install_mac/arm64/lib/libzzt_qrcode.dylib \
+    -output ./install_mac/universal/lib/libzzt_qrcode.dylib
+```
 
 ### Android
 
@@ -116,47 +148,46 @@ You can also build the `.so` files manually using the NDK toolchain file.
 # Set your NDK path
 export ANDROID_NDK=/path/to/android-ndk
 
-# Build for arm64-v8a
-mkdir build-android-arm64 && cd build-android-arm64
-cmake -G Ninja \
+# Build and Install for arm64-v8a
+cmake -B build-android-arm64 -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
     -DANDROID_ABI="arm64-v8a" \
     -DANDROID_PLATFORM=android-24 \
     -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON \
     -DCMAKE_BUILD_TYPE=Release \
-    -DBUILD_ANDROID_JNI=ON \
-    ..
-cmake --build . -j 4
+    -DBUILD_ANDROID_JNI=ON
+cmake --build build-android-arm64 -j 4
+cmake --install build-android-arm64 --prefix ./install_android/arm64-v8a
 
-# Build for armeabi-v7a
-cd ..
-mkdir build-android-armv7 && cd build-android-armv7
-cmake -G Ninja \
+# Build and Install for armeabi-v7a
+cmake -B build-android-armv7 -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
     -DANDROID_ABI="armeabi-v7a" \
     -DANDROID_PLATFORM=android-24 \
     -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON \
     -DCMAKE_BUILD_TYPE=Release \
-    -DBUILD_ANDROID_JNI=ON \
-    ..
-cmake --build . -j 4
+    -DBUILD_ANDROID_JNI=ON
+cmake --build build-android-armv7 -j 4
+cmake --install build-android-armv7 --prefix ./install_android/armeabi-v7a
 ```
 
-> After the build is complete, you can find the generated libraries in the build directory:
-> *   `libzzt_qrcode.so` (Core): located in `core/` subdirectory.
-> *   `libzzt_qrcode_jni.so` (JNI): located in `core/` subdirectory.
+> After the installation is complete, you can find the isolated artifacts for each architecture in `install_android/<abi>/lib/` (e.g., `libzzt_qrcode.so` and `libzzt_qrcode_jni.so`).
 
 ### Unity
 
 To use this library in Unity, you need to compile the native plugins (`.dll` for Windows / `.so` for Android) yourself and place them into the Unity project.
 
 1.  **Build for Windows (x64)**:
-    *   Build `zzt_qrcode.dll` using the instructions in the [Windows](#windows) section above.
-    *   Copy the generated `zzt_qrcode.dll` to `unity/xyz.zhuzeitou.qrcode/Plugins/Windows/x86_64/`.
+    *   Build `zzt_qrcode.dll` and run `--install` using the instructions in the [Windows](#windows) section above.
+    *   Copy the generated `install_output/bin/zzt_qrcode.dll` to `unity/xyz.zhuzeitou.qrcode/Plugins/Windows/x86_64/`.
 
-2.  **Build for Android (Multi-Architecture)**:
-    *   Build `libzzt_qrcode.so` for both `arm64-v8a` and `armeabi-v7a` using the CMake commands in the [Android](#android) section above.
-    *   Copy the generated `libzzt_qrcode.so` files (from the `core/` subdirectory) to the corresponding Unity plugin folders:
+2.  **Build for macOS (Universal)**:
+    *   Build the universal `libzzt_qrcode.dylib` using the `lipo` instructions in the [macOS](#macos) section above.
+    *   Copy the generated `install_mac/universal/lib/libzzt_qrcode.dylib` to `unity/xyz.zhuzeitou.qrcode/Plugins/macOS/`.
+
+3.  **Build for Android (Multi-Architecture)**:
+    *   Build and install both `arm64-v8a` and `armeabi-v7a` using the CMake commands in the [Android](#android) section above.
+    *   Copy the generated `libzzt_qrcode.so` files from their respective `install_android/<abi>/lib/` folders to the corresponding Unity plugin folders:
         *   `arm64-v8a` -> `unity/xyz.zhuzeitou.qrcode/Plugins/Android/libs/arm64-v8a/`
         *   `armeabi-v7a` -> `unity/xyz.zhuzeitou.qrcode/Plugins/Android/libs/armeabi-v7a/`
 
@@ -339,7 +370,7 @@ The project is organized into the following directories:
 *   [x] **Windows**: Tested and supported.
 *   [x] **Linux**: Tested and supported.
 *   [x] **Android**: Tested and supported.
-*   [ ] **macOS**: Theoretically supported but not verified.
+*   [x] **macOS**: Tested and supported.
 *   [ ] **iOS**: Planned.
 
 ## Acknowledgements
