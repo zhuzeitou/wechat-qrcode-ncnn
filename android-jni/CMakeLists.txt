@@ -2,7 +2,7 @@ set(CMAKE_C_STANDARD 11)
 
 add_library(zzt_qrcode_jni SHARED qrcode_jni.c)
 
-target_link_libraries(zzt_qrcode_jni PRIVATE zzt_qrcode log)
+target_link_libraries(zzt_qrcode_jni PRIVATE zzt_qrcode)
 
 set_target_properties(zzt_qrcode_jni PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:zzt_qrcode>
