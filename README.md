@@ -98,18 +98,31 @@ cmake --install build --prefix ./install_output
 
 ### macOS
 
-**Important**: Do not use `-DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"` to compile a Universal Fat Library in a single CMake pass. CPU architecture detection macros for `ncnn` (like ARM NEON and Intel AVX) will fail during the CMake configure stage, resulting in the loss of all hardware-accelerated optimizations. 
+For macOS, you should build the `x86_64` and `arm64` architectures separately and then merge them. 
 
-Instead, configure, build, and install each architecture separately, then merge them using `lipo`:
+**1. Use the iOS Toolchain for Cross-Compilation**
+
+When building for an architecture different from your host (e.g., building `x86_64` on Apple Silicon), relying solely on `-DCMAKE_OSX_ARCHITECTURES` is insufficient as CMake may still use the host's processor for configuration, leading to incorrect instruction set detection.
+Instead, it is **highly recommended** to explicitly use the `ios.toolchain.cmake` provided by the `ncnn` submodule (originally maintained by [leetal/ios-cmake](https://github.com/leetal/ios-cmake)). This toolchain correctly configures the environment under the hood to ensure `ncnn` enables the proper optimizations for the target architecture.
+
+**2. Avoid Universal Binaries in CMake**
+
+Do **not** attempt to compile a Universal Fat Library in a single CMake pass (e.g., using `-DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"` or the toolchain's `MAC_UNIVERSAL` platform). Due to `ncnn`'s reliance on CPU instruction set detection (like ARM NEON and Intel AVX) during the configuration stage, a multi-architecture target will cause these detection macros to fail, resulting in the loss of all hardware-accelerated optimizations.
+
+Configure, build, and install each architecture separately using the toolchain, then merge them using `lipo`:
 
 ```bash
 # 1. Build and install for x86_64
-cmake -B build-mac-x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="x86_64"
+cmake -B build-mac-x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE=core/third_party/ncnn/toolchains/ios.toolchain.cmake \
+    -DPLATFORM=MAC
 cmake --build build-mac-x86_64 -j 4
 cmake --install build-mac-x86_64 --prefix ./install_mac/x86_64
 
 # 2. Build and install for arm64 (Apple Silicon)
-cmake -B build-mac-arm64 -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64"
+cmake -B build-mac-arm64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE=core/third_party/ncnn/toolchains/ios.toolchain.cmake \
+    -DPLATFORM=MAC_ARM64
 cmake --build build-mac-arm64 -j 4
 cmake --install build-mac-arm64 --prefix ./install_mac/arm64
 
