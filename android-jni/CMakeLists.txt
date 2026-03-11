@@ -16,3 +16,10 @@ if (CMAKE_BUILD_TYPE STREQUAL "Release")
     target_link_options(zzt_qrcode_jni PRIVATE "LINKER:--exclude-libs,ALL")
     target_link_options(zzt_qrcode_jni PRIVATE "-s")
 endif ()
+
+# --- Installation Configuration ---
+include(GNUInstallDirs)
+
+install(TARGETS zzt_qrcode_jni
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

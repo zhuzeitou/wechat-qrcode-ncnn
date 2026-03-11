@@ -23,7 +23,7 @@ if (NOT TARGET ncnn)
         set(NCNN_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
         set(NCNN_BUILD_BENCHMARK OFF CACHE BOOL "" FORCE)
         
-        add_subdirectory(third_party/ncnn)
+        add_subdirectory(third_party/ncnn EXCLUDE_FROM_ALL)
     else()
         message(FATAL_ERROR "NCNN submodule not found! Please run: git submodule update --init --recursive")
     endif()
@@ -82,3 +82,17 @@ if (CMAKE_BUILD_TYPE STREQUAL "Release")
     endif ()
 endif ()
 
+# --- Installation Configuration ---
+include(GNUInstallDirs)
+
+install(TARGETS zzt_qrcode
+        EXPORT zzt_qrcode_Targets
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+        FILES_MATCHING PATTERN "*.h"
+)

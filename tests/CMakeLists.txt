@@ -15,3 +15,10 @@ if (CMAKE_BUILD_TYPE STREQUAL "Release")
         target_link_options(qrcodetest PRIVATE "-s")
     endif ()
 endif ()
+
+# --- Installation Configuration ---
+include(GNUInstallDirs)
+
+install(TARGETS qrcodetest
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
