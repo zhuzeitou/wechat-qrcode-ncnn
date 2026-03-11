@@ -1,4 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
+
+if(NOT DEFINED CMAKE_INSTALL_PREFIX)
+    set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/install" CACHE PATH "Installation Directory")
+endif()
+
 project("wechat_qrcode_ncnn")
 
 add_subdirectory(core)
