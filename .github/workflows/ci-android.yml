@@ -1,0 +1,50 @@
+name: CI - Android
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    name: Android (all ABIs)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      - name: Build all ABIs
+        run: |
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            echo "========================================="
+            echo "Building for $abi"
+            echo "========================================="
+            cmake -B build-$abi -G Ninja \
+              -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
+              -DANDROID_ABI=$abi \
+              -DANDROID_PLATFORM=android-24 \
+              -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON \
+              -DCMAKE_BUILD_TYPE=Release
+            cmake --build build-$abi -j$(nproc)
+            cmake --install build-$abi --prefix ./install_android/$abi
+          done
+
+      - name: Verify artifacts
+        run: |
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            echo "Checking $abi..."
+            ls -la install_android/$abi/lib/
+            test -f install_android/$abi/lib/libzzt_qrcode.so
+            echo "✅ $abi: libzzt_qrcode.so found"
+          done
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-all-abis
+          path: install_android/

@@ -1,0 +1,64 @@
+name: CI - Linux
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+            cmake_extra: ""
+            install_deps: ""
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            cmake_extra: ""
+            install_deps: ""
+          - arch: x86
+            runner: ubuntu-latest
+            cmake_extra: >-
+              -DCMAKE_C_FLAGS=-m32
+              -DCMAKE_CXX_FLAGS=-m32
+              -DCMAKE_SYSTEM_PROCESSOR=i686
+            install_deps: gcc-multilib g++-multilib
+
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build ${{ matrix.install_deps }}
+
+      - name: Configure
+        run: >
+          cmake -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          ${{ matrix.cmake_extra }}
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Install
+        run: cmake --install build --prefix ./install_output
+
+      - name: Verify artifacts
+        run: |
+          echo "Checking install output..."
+          ls -la install_output/lib/
+          test -f install_output/lib/libzzt_qrcode.so
+          echo "✅ libzzt_qrcode.so found"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: install_output/

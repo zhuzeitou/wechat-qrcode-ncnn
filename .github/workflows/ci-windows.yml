@@ -1,0 +1,51 @@
+name: CI - Windows
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            cmake_arch: x64
+          - arch: x86
+            cmake_arch: Win32
+          - arch: arm64
+            cmake_arch: ARM64
+
+    name: Windows ${{ matrix.arch }}
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        run: cmake -B build -A ${{ matrix.cmake_arch }}
+
+      - name: Build
+        run: cmake --build build --config Release -j $env:NUMBER_OF_PROCESSORS
+
+      - name: Install
+        run: cmake --install build --config Release --prefix ./install_output
+
+      - name: Verify artifacts
+        run: |
+          Write-Host "Checking install output..."
+          Get-ChildItem install_output/bin/
+          if (Test-Path install_output/bin/zzt_qrcode.dll) {
+            Write-Host "✅ zzt_qrcode.dll found"
+          } else {
+            Write-Error "❌ zzt_qrcode.dll not found"
+            exit 1
+          }
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.arch }}
+          path: install_output/

@@ -1,0 +1,52 @@
+name: CI - macOS
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            platform: MAC_ARM64
+          - arch: x86_64
+            platform: MAC
+
+    name: macOS ${{ matrix.arch }}
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Ninja
+        run: brew install ninja
+
+      - name: Configure
+        run: >
+          cmake -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_TOOLCHAIN_FILE=core/third_party/ncnn/toolchains/ios.toolchain.cmake
+          -DPLATFORM=${{ matrix.platform }}
+
+      - name: Build
+        run: cmake --build build -j$(sysctl -n hw.ncpu)
+
+      - name: Install
+        run: cmake --install build --prefix ./install_output
+
+      - name: Verify artifacts
+        run: |
+          echo "Checking install output..."
+          ls -la install_output/lib/
+          test -f install_output/lib/libzzt_qrcode.dylib
+          echo "✅ libzzt_qrcode.dylib found"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: install_output/
