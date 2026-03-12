@@ -53,35 +53,38 @@ int main(int argc, char *argv[]) {
         zzt_qrcode_error_t ret_size = zzt_qrcode_get_result_size(result, &result_size);
         std::cout << "result length: " << result_size << std::endl;
         if (ret_size == ZZT_QRCODE_OK && result_size > 0) {
+            for (int j = 0; j < result_size; j++)
             {
-                std::cout << "result text: ";
-                int text_buf_size = 0;
-                zzt_qrcode_error_t ret = zzt_qrcode_get_result_text(result, 0, nullptr, &text_buf_size);
-                if (ret == ZZT_QRCODE_OK && text_buf_size > 0) {
-                    std::vector<char> result_text(text_buf_size, 0);
-                    ret = zzt_qrcode_get_result_text(result, 0, result_text.data(), &text_buf_size);
+                {
+                    std::cout << "result text: ";
+                    int text_buf_size = 0;
+                    zzt_qrcode_error_t ret = zzt_qrcode_get_result_text(result, j, nullptr, &text_buf_size);
                     if (ret == ZZT_QRCODE_OK && text_buf_size > 0) {
-                        std::cout << result_text.data();
-                    }
-                }
-                std::cout << std::endl;
-            }
-
-            {
-                std::cout << "result points: [";
-                int point_len = 0;
-                zzt_qrcode_error_t ret = zzt_qrcode_get_result_points(result, 0, nullptr, &point_len);
-                if (ret == ZZT_QRCODE_OK && point_len > 0) {
-                    std::vector<float> result_point(point_len, 0);
-                    ret = zzt_qrcode_get_result_points(result, 0, result_point.data(), &point_len);
-                    if (ret == ZZT_QRCODE_OK && point_len > 0) {
-                        for (int j = 0; j < point_len / 2; j++) {
-                            if (j != 0) std::cout << ", ";
-                            std::cout << "(" << result_point[j * 2] << ", " << result_point[j * 2 + 1] << ")";
+                        std::vector<char> result_text(text_buf_size, 0);
+                        ret = zzt_qrcode_get_result_text(result, j, result_text.data(), &text_buf_size);
+                        if (ret == ZZT_QRCODE_OK && text_buf_size > 0) {
+                            std::cout << result_text.data();
                         }
                     }
+                    std::cout << std::endl;
                 }
-                std::cout << "]" << std::endl;
+
+                {
+                    std::cout << "result points: [";
+                    int point_len = 0;
+                    zzt_qrcode_error_t ret = zzt_qrcode_get_result_points(result, j, nullptr, &point_len);
+                    if (ret == ZZT_QRCODE_OK && point_len > 0) {
+                        std::vector<float> result_point(point_len, 0);
+                        ret = zzt_qrcode_get_result_points(result, j, result_point.data(), &point_len);
+                        if (ret == ZZT_QRCODE_OK && point_len > 0) {
+                            for (int j = 0; j < point_len / 2; j++) {
+                                if (j != 0) std::cout << ", ";
+                                std::cout << "(" << result_point[j * 2] << ", " << result_point[j * 2 + 1] << ")";
+                            }
+                        }
+                    }
+                    std::cout << "]" << std::endl;
+                }
             }
         }
         zzt_qrcode_error_t ret_release = zzt_qrcode_release_result(result);
