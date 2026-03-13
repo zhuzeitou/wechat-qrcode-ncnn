@@ -113,13 +113,8 @@ jobs:
             echo "✅ All required .meta files found"
           fi
 
-      - name: Create Zip Package
-        run: |
-          cd unity
-          zip -r ../Unity-Package.zip xyz.zhuzeitou.qrcode/
-
       - name: Upload Unity Package
         uses: actions/upload-artifact@v6
         with:
           name: Unity-Package
-          path: Unity-Package.zip
+          path: unity/
