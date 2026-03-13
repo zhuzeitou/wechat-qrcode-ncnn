@@ -1,43 +1,65 @@
 name: CI - Unity Packaging
 
-on:
-  workflow_run:
-    workflows: ["CI - Windows", "CI - Android"]
-    types: [completed]
+on: [push, pull_request]
 
 jobs:
   package:
     name: Create Unity Package
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Wait for Windows x64
+        uses: fountainhead/action-wait-for-check@v1.2.0
+        id: wait-for-windows
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          checkName: "Windows x64"
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          timeoutSeconds: 1800
+
+      - name: Wait for Android
+        uses: fountainhead/action-wait-for-check@v1.2.0
+        id: wait-for-android
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          checkName: "Android (all ABIs)"
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          timeoutSeconds: 1800
+
+      - name: Check Statuses
+        if: steps.wait-for-windows.outputs.conclusion != 'success' || steps.wait-for-android.outputs.conclusion != 'success'
+        run: |
+          echo "Prerequisite jobs failed or timed out."
+          echo "Windows status: ${{ steps.wait-for-windows.outputs.conclusion }}"
+          echo "Android status: ${{ steps.wait-for-android.outputs.conclusion }}"
+          exit 1
+
       - name: Download Windows Artifact
-        uses: dawidd6/action-download-artifact@v9
+        uses: dawidd6/action-download-artifact@v17
         with:
           workflow: ci-windows.yml
           name: windows-x64
           path: artifacts/windows
-          commit: ${{ github.event.workflow_run.head_sha }}
+          commit: ${{ github.event.pull_request.head.sha || github.sha }}
           workflow_conclusion: success
           check_artifacts: true
           search_artifacts: true
-          if_no_artifact_found: warn
+          if_no_artifact_found: error
 
       - name: Download Android Artifact
-        uses: dawidd6/action-download-artifact@v9
+        uses: dawidd6/action-download-artifact@v17
         with:
           workflow: ci-android.yml
           name: android-all-abis
           path: artifacts/android
-          commit: ${{ github.event.workflow_run.head_sha }}
+          commit: ${{ github.event.pull_request.head.sha || github.sha }}
           workflow_conclusion: success
           check_artifacts: true
           search_artifacts: true
-          if_no_artifact_found: warn
+          if_no_artifact_found: error
 
       - name: Organize Artifacts
         run: |
@@ -50,7 +72,8 @@ jobs:
             cp "artifacts/windows/bin/zzt_qrcode.dll" "$PLUGINS_DIR/Windows/x86_64/"
             echo "✅ Windows x64 added"
           else
-            echo "⚠️ Windows binary not found in artifacts"
+            echo "❌ Windows binary not found in artifacts"
+            exit 1
           fi
           
           echo "Organizing Android binaries..."
@@ -60,7 +83,8 @@ jobs:
               cp "artifacts/android/$abi/lib/libzzt_qrcode.so" "$PLUGINS_DIR/Android/$abi/"
               echo "✅ Android $abi added"
             else
-              echo "⚠️ Android $abi binary not found in artifacts"
+              echo "❌ Android $abi binary not found in artifacts"
+              exit 1
             fi
           done
 
@@ -84,8 +108,9 @@ jobs:
           done
           
           if [ $MISSING_META -eq 1 ]; then
-            echo "Some .meta files are missing. Please ensure they are committed to the repository."
-            # We don't exit 1 here yet because we want to see what's generated
+            echo "Some .meta files are missing in the repository. Please ensure they are committed."
+          else
+            echo "✅ All required .meta files found"
           fi
 
       - name: Create Zip Package
