@@ -1,0 +1,100 @@
+name: CI - Unity Packaging
+
+on:
+  workflow_run:
+    workflows: ["CI - Windows", "CI - Android"]
+    types: [completed]
+
+jobs:
+  package:
+    name: Create Unity Package
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download Windows Artifact
+        uses: dawidd6/action-download-artifact@v9
+        with:
+          workflow: ci-windows.yml
+          name: windows-x64
+          path: artifacts/windows
+          commit: ${{ github.event.workflow_run.head_sha }}
+          workflow_conclusion: success
+          check_artifacts: true
+          search_artifacts: true
+          if_no_artifact_found: warn
+
+      - name: Download Android Artifact
+        uses: dawidd6/action-download-artifact@v9
+        with:
+          workflow: ci-android.yml
+          name: android-all-abis
+          path: artifacts/android
+          commit: ${{ github.event.workflow_run.head_sha }}
+          workflow_conclusion: success
+          check_artifacts: true
+          search_artifacts: true
+          if_no_artifact_found: warn
+
+      - name: Organize Artifacts
+        run: |
+          # Define paths
+          PLUGINS_DIR="unity/xyz.zhuzeitou.qrcode/Plugins"
+          
+          echo "Organizing Windows binaries..."
+          if [ -f "artifacts/windows/bin/zzt_qrcode.dll" ]; then
+            mkdir -p "$PLUGINS_DIR/Windows/x86_64"
+            cp "artifacts/windows/bin/zzt_qrcode.dll" "$PLUGINS_DIR/Windows/x86_64/"
+            echo "✅ Windows x64 added"
+          else
+            echo "⚠️ Windows binary not found in artifacts"
+          fi
+          
+          echo "Organizing Android binaries..."
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            if [ -f "artifacts/android/$abi/lib/libzzt_qrcode.so" ]; then
+              mkdir -p "$PLUGINS_DIR/Android/$abi"
+              cp "artifacts/android/$abi/lib/libzzt_qrcode.so" "$PLUGINS_DIR/Android/$abi/"
+              echo "✅ Android $abi added"
+            else
+              echo "⚠️ Android $abi binary not found in artifacts"
+            fi
+          done
+
+      - name: Verify Meta Files
+        run: |
+          PLUGINS_DIR="unity/xyz.zhuzeitou.qrcode/Plugins"
+          MISSING_META=0
+          
+          # Check Windows meta
+          if [ -f "$PLUGINS_DIR/Windows/x86_64/zzt_qrcode.dll" ] && [ ! -f "$PLUGINS_DIR/Windows/x86_64/zzt_qrcode.dll.meta" ]; then
+            echo "❌ Missing meta for Windows/x86_64/zzt_qrcode.dll"
+            MISSING_META=1
+          fi
+          
+          # Check Android metas
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            if [ -f "$PLUGINS_DIR/Android/$abi/libzzt_qrcode.so" ] && [ ! -f "$PLUGINS_DIR/Android/$abi/libzzt_qrcode.so.meta" ]; then
+              echo "❌ Missing meta for Android/$abi/libzzt_qrcode.so"
+              MISSING_META=1
+            fi
+          done
+          
+          if [ $MISSING_META -eq 1 ]; then
+            echo "Some .meta files are missing. Please ensure they are committed to the repository."
+            # We don't exit 1 here yet because we want to see what's generated
+          fi
+
+      - name: Create Zip Package
+        run: |
+          cd unity
+          zip -r ../Unity-Package.zip xyz.zhuzeitou.qrcode/
+
+      - name: Upload Unity Package
+        uses: actions/upload-artifact@v6
+        with:
+          name: Unity-Package
+          path: Unity-Package.zip
