@@ -176,6 +176,7 @@ cmake --install build-android-arm64 --prefix ./install_android/arm64-v8a
 cmake -B build-android-armv7 -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
     -DANDROID_ABI="armeabi-v7a" \
+    -DANDROID_ARM_NEON=ON \
     -DANDROID_PLATFORM=android-24 \
     -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON \
     -DCMAKE_BUILD_TYPE=Release \
