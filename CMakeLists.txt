@@ -8,10 +8,10 @@ project("wechat_qrcode_ncnn")
 
 add_subdirectory(core)
 
-option(BUILD_TESTS "Build test programs" OFF)
-option(BUILD_ANDROID_JNI "Build Android JNI bridge library" OFF)
+option(ZZT_BUILD_TESTS "Build test programs" OFF)
+option(ZZT_BUILD_ANDROID_JNI "Build Android JNI bridge library" OFF)
 
-if (BUILD_TESTS)
+if (ZZT_BUILD_TESTS)
     if (ANDROID)
         message(WARNING "Building tests is unsupported on Android, skipping 'tests' subdirectory")
     else ()
@@ -19,7 +19,7 @@ if (BUILD_TESTS)
     endif ()
 endif ()
 
-if (BUILD_ANDROID_JNI)
+if (ZZT_BUILD_ANDROID_JNI)
     if (NOT ANDROID)
         message(WARNING "Building Android JNI bridge library requires Android platform, skipping 'android-jni' subdirectory")
     else ()

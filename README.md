@@ -58,7 +58,7 @@ cmake --install build --prefix ./install_output
 
 1.  Generate the solution:
     ```cmd
-    cmake -B build -A x64 -DBUILD_TESTS=ON
+    cmake -B build -A x64 -DZZT_BUILD_TESTS=ON
     ```
 2.  Build via command line (or open `.sln` in VS):
     ```cmd
@@ -74,7 +74,7 @@ cmake --install build --prefix ./install_output
 1.  Open **x64 Native Tools Command Prompt for VS 20xx**.
 2.  Run the following commands:
     ```cmd
-    cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
+    cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DZZT_BUILD_TESTS=ON
     cmake --build build -j 4
     cmake --install build --prefix ./install_output
     ```
@@ -88,7 +88,7 @@ cmake --install build --prefix ./install_output
     ```
 3.  Run the following commands:
     ```bash
-    cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
+    cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DZZT_BUILD_TESTS=ON
     cmake --build build -j 4
     cmake --install build --prefix ./install_output
     ```
@@ -168,7 +168,7 @@ cmake -B build-android-arm64 -G Ninja \
     -DANDROID_PLATFORM=android-24 \
     -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON \
     -DCMAKE_BUILD_TYPE=Release \
-    -DBUILD_ANDROID_JNI=ON
+    -DZZT_BUILD_ANDROID_JNI=ON
 cmake --build build-android-arm64 -j 4
 cmake --install build-android-arm64 --prefix ./install_android/arm64-v8a
 
@@ -180,7 +180,7 @@ cmake -B build-android-armv7 -G Ninja \
     -DANDROID_PLATFORM=android-24 \
     -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON \
     -DCMAKE_BUILD_TYPE=Release \
-    -DBUILD_ANDROID_JNI=ON
+    -DZZT_BUILD_ANDROID_JNI=ON
 cmake --build build-android-armv7 -j 4
 cmake --install build-android-armv7 --prefix ./install_android/armeabi-v7a
 ```

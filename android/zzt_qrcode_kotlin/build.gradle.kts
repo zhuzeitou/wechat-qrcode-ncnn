@@ -18,7 +18,7 @@ android {
         consumerProguardFiles("consumer-rules.pro")
         externalNativeBuild {
             cmake {
-                arguments("-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON", "-DBUILD_ANDROID_JNI=ON")
+                arguments("-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON")
             }
         }
 
@@ -44,7 +44,7 @@ android {
     }
     externalNativeBuild {
         cmake {
-            path("src/main/cpp/CMakeLists.txt")
+            path("../zzt_qrcode_native/CMakeLists.txt")
             version = "4.1.2"
         }
     }
