@@ -25,7 +25,7 @@ jobs:
         id: wait-for-android
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          checkName: "Android (all ABIs)"
+          checkName: "Build Native Core (all ABIs)"
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           timeoutSeconds: 1800
 
@@ -53,7 +53,7 @@ jobs:
         uses: dawidd6/action-download-artifact@v17
         with:
           workflow: ci-android.yml
-          name: android-all-abis
+          name: android-core-libs
           path: artifacts/android
           commit: ${{ github.event.pull_request.head.sha || github.sha }}
           workflow_conclusion: success
