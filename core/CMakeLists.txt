@@ -67,6 +67,10 @@ if (CMAKE_BUILD_TYPE STREQUAL "Release")
             CXX_VISIBILITY_PRESET hidden
             VISIBILITY_INLINES_HIDDEN ON)
 
+    if (APPLE)
+        target_link_options(zzt_qrcode PRIVATE "LINKER:-x")
+    endif()    
+
     if (UNIX AND NOT APPLE)
         target_link_options(zzt_qrcode PRIVATE "LINKER:--exclude-libs,ALL")
         target_link_options(zzt_qrcode PRIVATE "-s")

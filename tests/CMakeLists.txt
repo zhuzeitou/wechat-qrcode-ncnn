@@ -11,7 +11,17 @@ if (CMAKE_BUILD_TYPE STREQUAL "Release")
             CXX_VISIBILITY_PRESET hidden
             VISIBILITY_INLINES_HIDDEN ON)
 
-    if (NOT MSVC)
+    if (APPLE)
+        target_link_options(qrcodetest PRIVATE "LINKER:-x")
+    endif ()
+
+    if (UNIX AND NOT APPLE)
+        target_link_options(qrcodetest PRIVATE "LINKER:--exclude-libs,ALL")
+        target_link_options(qrcodetest PRIVATE "-s")
+    endif ()
+
+    if (WIN32 AND NOT MSVC)
+        target_link_options(qrcodetest PRIVATE "LINKER:--exclude-all-symbols")
         target_link_options(qrcodetest PRIVATE "-s")
     endif ()
 endif ()
