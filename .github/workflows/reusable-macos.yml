@@ -1,6 +1,7 @@
-name: CI - macOS
+name: Reusable macOS Build
 
-on: [push, pull_request]
+on:
+  workflow_call:
 
 jobs:
   build:
@@ -40,8 +41,6 @@ jobs:
 
       - name: Verify artifacts
         run: |
-          echo "Checking install output..."
-          ls -la install_output/lib/
           test -f install_output/lib/libzzt_qrcode.dylib
           echo "✅ libzzt_qrcode.dylib found"
 

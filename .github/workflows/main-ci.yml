@@ -1,0 +1,34 @@
+name: Main CI Orchestrator
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  windows-build:
+    uses: ./.github/workflows/reusable-windows.yml
+
+  macos-build:
+    uses: ./.github/workflows/reusable-macos.yml
+
+  linux-build:
+    uses: ./.github/workflows/reusable-linux.yml
+
+  android-native-build:
+    uses: ./.github/workflows/reusable-android-native.yml
+
+  android-gradle-build:
+    needs: [android-native-build]
+    uses: ./.github/workflows/reusable-android-gradle.yml
+    with:
+      native-artifact-name: android-core-libs
+
+  unity-packaging:
+    needs: [windows-build, android-native-build]
+    uses: ./.github/workflows/reusable-unity.yml
+    with:
+      windows-artifact-name: windows-x64
+      android-artifact-name: android-core-libs

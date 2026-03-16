@@ -1,6 +1,7 @@
-name: CI - Linux
+name: Reusable Linux Build
 
-on: [push, pull_request]
+on:
+  workflow_call:
 
 jobs:
   build:
@@ -52,8 +53,6 @@ jobs:
 
       - name: Verify artifacts
         run: |
-          echo "Checking install output..."
-          ls -la install_output/lib/
           test -f install_output/lib/libzzt_qrcode.so
           echo "✅ libzzt_qrcode.so found"
 

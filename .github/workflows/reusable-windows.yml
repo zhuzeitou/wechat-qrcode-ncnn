@@ -1,6 +1,11 @@
-name: CI - Windows
+name: Reusable Windows Build
 
-on: [push, pull_request]
+on:
+  workflow_call:
+    outputs:
+      artifact-name-prefix:
+        description: "Prefix for Windows artifacts"
+        value: "windows-"
 
 jobs:
   build:
@@ -40,8 +45,6 @@ jobs:
 
       - name: Verify artifacts
         run: |
-          Write-Host "Checking install output..."
-          Get-ChildItem install_output/bin/
           if (Test-Path install_output/bin/zzt_qrcode.dll) {
             Write-Host "✅ zzt_qrcode.dll found"
           } else {

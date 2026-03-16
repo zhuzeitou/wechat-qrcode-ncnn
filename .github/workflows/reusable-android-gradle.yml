@@ -1,0 +1,69 @@
+name: Reusable Android Gradle Build
+
+on:
+  workflow_call:
+    inputs:
+      native-artifact-name:
+        required: true
+        type: string
+
+jobs:
+  build-aar:
+    name: Android AAR (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [zzt_qrcode_kotlin, zzt_qrcode_java]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Download Native Core
+        uses: actions/download-artifact@v6
+        with:
+          name: ${{ inputs.native-artifact-name }}
+          path: native-libs
+
+      - name: Prepare Prebuilt Structure
+        run: |
+          mkdir -p android/zzt_qrcode_native/prebuilt
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            echo "Deploying $abi prebuilts..."
+            dest="android/zzt_qrcode_native/prebuilt/$abi"
+            mkdir -p "$dest/lib"
+            cp -r native-libs/$abi/lib/*.so "$dest/lib/"
+            cp -r native-libs/$abi/include "$dest/"
+          done
+
+      - name: Build AAR
+        working-directory: android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew :${{ matrix.module }}:assembleRelease
+
+      - name: Verify AAR
+        run: |
+          echo "Checking ${{ matrix.module }} AAR..."
+          aar=$(find android/${{ matrix.module }}/build -name "*.aar" | head -1)
+          if [ -n "$aar" ]; then
+            echo "✅ AAR found: $aar"
+          else
+            echo "❌ AAR not found"
+            exit 1
+          fi
+
+      - name: Upload AAR Artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: aar-${{ matrix.module }}
+          path: android/${{ matrix.module }}/build/outputs/aar/*.aar

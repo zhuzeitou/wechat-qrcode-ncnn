@@ -1,6 +1,14 @@
-name: CI - Unity Packaging
+name: Reusable Unity Packaging
 
-on: [push, pull_request]
+on:
+  workflow_call:
+    inputs:
+      windows-artifact-name:
+        required: true
+        type: string
+      android-artifact-name:
+        required: true
+        type: string
 
 jobs:
   package:
@@ -11,55 +19,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Wait for Windows x64
-        uses: fountainhead/action-wait-for-check@v1.2.0
-        id: wait-for-windows
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          checkName: "Windows x64"
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          timeoutSeconds: 1800
-
-      - name: Wait for Android
-        uses: fountainhead/action-wait-for-check@v1.2.0
-        id: wait-for-android
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          checkName: "Build Native Core (all ABIs)"
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          timeoutSeconds: 1800
-
-      - name: Check Statuses
-        if: steps.wait-for-windows.outputs.conclusion != 'success' || steps.wait-for-android.outputs.conclusion != 'success'
-        run: |
-          echo "Prerequisite jobs failed or timed out."
-          echo "Windows status: ${{ steps.wait-for-windows.outputs.conclusion }}"
-          echo "Android status: ${{ steps.wait-for-android.outputs.conclusion }}"
-          exit 1
-
       - name: Download Windows Artifact
-        uses: dawidd6/action-download-artifact@v17
+        uses: actions/download-artifact@v6
         with:
-          workflow: ci-windows.yml
-          name: windows-x64
+          name: ${{ inputs.windows-artifact-name }}
           path: artifacts/windows
-          commit: ${{ github.event.pull_request.head.sha || github.sha }}
-          workflow_conclusion: success
-          check_artifacts: true
-          search_artifacts: true
-          if_no_artifact_found: error
 
       - name: Download Android Artifact
-        uses: dawidd6/action-download-artifact@v17
+        uses: actions/download-artifact@v6
         with:
-          workflow: ci-android.yml
-          name: android-core-libs
+          name: ${{ inputs.android-artifact-name }}
           path: artifacts/android
-          commit: ${{ github.event.pull_request.head.sha || github.sha }}
-          workflow_conclusion: success
-          check_artifacts: true
-          search_artifacts: true
-          if_no_artifact_found: error
 
       - name: Organize Artifacts
         run: |
