@@ -39,10 +39,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build ${{ matrix.install_deps }}
 
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ccache-linux-${{ matrix.arch }}
+
       - name: Configure
         run: >
           cmake -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           ${{ matrix.cmake_extra }}
 
       - name: Build

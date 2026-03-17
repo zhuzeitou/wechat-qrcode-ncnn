@@ -34,8 +34,14 @@ jobs:
         with:
           arch: ${{ matrix.msvc_arch }}
 
+      - name: sccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ccache-windows-${{ matrix.arch }}
+          variant: sccache
+
       - name: Configure
-        run: cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
       - name: Build
         run: cmake --build build -j $env:NUMBER_OF_PROCESSORS
