@@ -1,10 +1,13 @@
 # WeChat QRCode NCNN
 
 ![C++](https://img.shields.io/badge/language-C++-blue.svg)
+![Windows](https://img.shields.io/badge/platform-Windows-blue.svg)
+![Linux](https://img.shields.io/badge/platform-Linux-orange.svg)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)
 ![Android](https://img.shields.io/badge/platform-Android-green.svg)
 ![Unity](https://img.shields.io/badge/platform-Unity-black.svg)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
+![CI](https://github.com/zhuzeitou/wechat-qrcode-ncnn/actions/workflows/main-ci.yml/badge.svg)
 
 A high-performance WeChat QRCode recognition library based on [ncnn](https://github.com/Tencent/ncnn). This project is ported from [OpenCV WeChat QRCode](https://github.com/opencv/opencv_contrib/tree/master/modules/wechat_qrcode), but completely removes the OpenCV dependency by using **ncnn** for inference and **ncnn**'s **simpleocv** module for image processing. Additionally, the result point coordinates have been reordered to be consistent with [ZXing](https://github.com/zxing/zxing): 3 points (bottom-left, top-left, top-right) for Version 1, or 4 points (bottom-left, top-left, top-right, alignment) for higher versions.
 
@@ -54,11 +57,18 @@ cmake --install build --prefix ./install_output
 
 ### Windows
 
+The following architectures are supported: **x64**, **x86**, and **arm64** (cross-compilation).
+
 **Option 1: Visual Studio Solution**
 
 1.  Generate the solution:
     ```cmd
-    cmake -B build -A x64 -DZZT_BUILD_TESTS=ON
+    # For x64 (default):
+    cmake -B build -A x64
+    # For x86:
+    cmake -B build -A Win32
+    # For arm64 (cross-compilation):
+    cmake -B build -A ARM64
     ```
 2.  Build via command line (or open `.sln` in VS):
     ```cmd
@@ -144,6 +154,7 @@ The Android integration consists of two parts:
 *   **`android/`**: Gradle project containing two library modules:
     *   **`zzt_qrcode_kotlin`**: (Recommended) Kotlin implementation with coroutine support.
     *   **`zzt_qrcode_java`**: Java implementation.
+    *   **`zzt_qrcode_native/`**: CMake sub-project that manages native library compilation. Supports both source build and prebuilt import via `ZZT_USE_PREBUILT` option.
 
 1.  Open the `android/` directory in **Android Studio**.
 2.  Sync Gradle.
@@ -183,6 +194,28 @@ cmake -B build-android-armv7 -G Ninja \
     -DZZT_BUILD_ANDROID_JNI=ON
 cmake --build build-android-armv7 -j 4
 cmake --install build-android-armv7 --prefix ./install_android/armeabi-v7a
+
+# Build and Install for x86
+cmake -B build-android-x86 -G Ninja \
+    -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
+    -DANDROID_ABI="x86" \
+    -DANDROID_PLATFORM=android-24 \
+    -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DZZT_BUILD_ANDROID_JNI=ON
+cmake --build build-android-x86 -j 4
+cmake --install build-android-x86 --prefix ./install_android/x86
+
+# Build and Install for x86_64
+cmake -B build-android-x86_64 -G Ninja \
+    -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
+    -DANDROID_ABI="x86_64" \
+    -DANDROID_PLATFORM=android-24 \
+    -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DZZT_BUILD_ANDROID_JNI=ON
+cmake --build build-android-x86_64 -j 4
+cmake --install build-android-x86_64 --prefix ./install_android/x86_64
 ```
 
 > After the installation is complete, you can find the isolated artifacts for each architecture in `install_android/<abi>/lib/` (e.g., `libzzt_qrcode.so` and `libzzt_qrcode_jni.so`).
@@ -202,8 +235,10 @@ To use this library in Unity, you need to compile the native plugins (`.dll` for
 3.  **Build for Android (Multi-Architecture)**:
     *   Build and install both `arm64-v8a` and `armeabi-v7a` using the CMake commands in the [Android](#android) section above.
     *   Copy the generated `libzzt_qrcode.so` files from their respective `install_android/<abi>/lib/` folders to the corresponding Unity plugin folders:
-        *   `arm64-v8a` -> `unity/xyz.zhuzeitou.qrcode/Plugins/Android/libs/arm64-v8a/`
-        *   `armeabi-v7a` -> `unity/xyz.zhuzeitou.qrcode/Plugins/Android/libs/armeabi-v7a/`
+        *   `arm64-v8a` -> `unity/xyz.zhuzeitou.qrcode/Plugins/Android/arm64-v8a/`
+        *   `armeabi-v7a` -> `unity/xyz.zhuzeitou.qrcode/Plugins/Android/armeabi-v7a/`
+        *   `x86` -> `unity/xyz.zhuzeitou.qrcode/Plugins/Android/x86/`
+        *   `x86_64` -> `unity/xyz.zhuzeitou.qrcode/Plugins/Android/x86_64/`
 
 ## Usage
 
@@ -376,6 +411,7 @@ The project is organized into the following directories:
 *   **`core/`**: C++ core library with the public C API, WeChat QRCode engine, and ncnn as a Git submodule.
 *   **`android-jni/`**: Android-specific JNI C wrapper that bridges the core library to Java/Kotlin.
 *   **`android/`**: Android Gradle project with platform wrappers (`zzt_qrcode_kotlin`, `zzt_qrcode_java`).
+    *   **`zzt_qrcode_native/`**: CMake sub-project for native library management (source build or prebuilt import).
 *   **`tests/`**: Test programs for the core library.
 *   **`unity/`**: Unity Package with C# wrappers and native plugin folders.
 
