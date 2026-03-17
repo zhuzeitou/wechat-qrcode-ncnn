@@ -3,8 +3,20 @@ name: Main CI Orchestrator
 on:
   push:
     branches: [ main, master ]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - 'docs/**'
+      - '.gitignore'
+      - '.clang-format'
   pull_request:
     branches: [ main, master ]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - 'docs/**'
+      - '.gitignore'
+      - '.clang-format'
   workflow_dispatch:
 
 jobs:
