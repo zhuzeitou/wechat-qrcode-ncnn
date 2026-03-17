@@ -30,21 +30,16 @@ jobs:
           cache: gradle
 
       - name: Download Native Core
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8.0.1
         with:
           name: ${{ inputs.native-artifact-name }}
           path: native-libs
 
       - name: Prepare Prebuilt Structure
         run: |
-          mkdir -p android/zzt_qrcode_native/prebuilt
-          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
-            echo "Deploying $abi prebuilts..."
-            dest="android/zzt_qrcode_native/prebuilt/$abi"
-            mkdir -p "$dest/lib"
-            cp -r native-libs/$abi/lib/*.so "$dest/lib/"
-            cp -r native-libs/$abi/include "$dest/"
-          done
+          dest="android/zzt_qrcode_native/prebuilt"
+          mkdir -p "$dest"
+          cp -r native-libs/. "$dest/"
 
       - name: Build AAR
         working-directory: android
