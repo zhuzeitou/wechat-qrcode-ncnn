@@ -222,18 +222,26 @@ cmake --install build-android-x86_64 --prefix ./install_android/x86_64
 
 ### Unity
 
-To use this library in Unity, you need to compile the native plugins (`.dll` for Windows / `.so` for Android) yourself and place them into the Unity project.
+To use this library in Unity, you need to compile the native plugins (`.dll` / `.so` / `.dylib`) yourself and place them into the Unity project.
 
-1.  **Build for Windows (x64)**:
-    *   Build `zzt_qrcode.dll` and run `--install` using the instructions in the [Windows](#windows) section above.
-    *   Copy the generated `install_output/bin/zzt_qrcode.dll` to `unity/xyz.zhuzeitou.qrcode/Plugins/Windows/x86_64/`.
+1.  **Build for Windows (x64 + x86)**:
+    *   Build `zzt_qrcode.dll` using the instructions in the [Windows](#windows) section above for each architecture.
+    *   Copy the generated `install_output/bin/zzt_qrcode.dll` to the corresponding Unity plugin folders:
+        *   x64 -> `unity/xyz.zhuzeitou.qrcode/Plugins/Windows/x86_64/`
+        *   x86 -> `unity/xyz.zhuzeitou.qrcode/Plugins/Windows/x86/`
 
-2.  **Build for macOS (Universal)**:
-    *   Build the universal `libzzt_qrcode.dylib` using the `lipo` instructions in the [macOS](#macos) section above.
-    *   Copy the generated `install_mac/universal/lib/libzzt_qrcode.dylib` to `unity/xyz.zhuzeitou.qrcode/Plugins/macOS/`.
+2.  **Build for macOS (arm64 + x86_64)**:
+    *   Build `libzzt_qrcode.dylib` for each architecture separately using the [macOS](#macos) section above (do **not** merge into a universal binary).
+    *   Copy the generated `libzzt_qrcode.dylib` from each `install_mac/<arch>/lib/` to the corresponding Unity plugin folders:
+        *   arm64 -> `unity/xyz.zhuzeitou.qrcode/Plugins/macOS/arm64/`
+        *   x86_64 -> `unity/xyz.zhuzeitou.qrcode/Plugins/macOS/x86_64/`
 
-3.  **Build for Android (Multi-Architecture)**:
-    *   Build and install both `arm64-v8a` and `armeabi-v7a` using the CMake commands in the [Android](#android) section above.
+3.  **Build for Linux (x86_64)**:
+    *   Build `libzzt_qrcode.so` using the standard build instructions.
+    *   Copy the generated `install_output/lib/libzzt_qrcode.so` to `unity/xyz.zhuzeitou.qrcode/Plugins/Linux/x86_64/`.
+
+4.  **Build for Android (Multi-Architecture)**:
+    *   Build and install all ABIs using the CMake commands in the [Android](#android) section above.
     *   Copy the generated `libzzt_qrcode.so` files from their respective `install_android/<abi>/lib/` folders to the corresponding Unity plugin folders:
         *   `arm64-v8a` -> `unity/xyz.zhuzeitou.qrcode/Plugins/Android/arm64-v8a/`
         *   `armeabi-v7a` -> `unity/xyz.zhuzeitou.qrcode/Plugins/Android/armeabi-v7a/`

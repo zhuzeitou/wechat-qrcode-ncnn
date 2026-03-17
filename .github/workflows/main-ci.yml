@@ -39,8 +39,12 @@ jobs:
       native-artifact-name: android-core-libs
 
   unity-packaging:
-    needs: [windows-build, android-native-build]
+    needs: [windows-build, linux-build, macos-build, android-native-build]
     uses: ./.github/workflows/reusable-unity.yml
     with:
-      windows-artifact-name: windows-x64
       android-artifact-name: android-core-libs
+      windows-x64-artifact-name: windows-x64
+      windows-x86-artifact-name: windows-x86
+      linux-artifact-name: linux-x86_64
+      macos-arm64-artifact-name: macos-arm64
+      macos-x86_64-artifact-name: macos-x86_64

@@ -3,7 +3,19 @@ name: Reusable Unity Packaging
 on:
   workflow_call:
     inputs:
-      windows-artifact-name:
+      windows-x64-artifact-name:
+        required: true
+        type: string
+      windows-x86-artifact-name:
+        required: true
+        type: string
+      linux-artifact-name:
+        required: true
+        type: string
+      macos-arm64-artifact-name:
+        required: true
+        type: string
+      macos-x86_64-artifact-name:
         required: true
         type: string
       android-artifact-name:
@@ -19,11 +31,35 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Download Windows Artifact
+      - name: Download Windows x64 Artifact
         uses: actions/download-artifact@v6
         with:
-          name: ${{ inputs.windows-artifact-name }}
-          path: artifacts/windows
+          name: ${{ inputs.windows-x64-artifact-name }}
+          path: artifacts/windows-x64
+
+      - name: Download Windows x86 Artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: ${{ inputs.windows-x86-artifact-name }}
+          path: artifacts/windows-x86
+
+      - name: Download Linux Artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: ${{ inputs.linux-artifact-name }}
+          path: artifacts/linux
+
+      - name: Download macOS arm64 Artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: ${{ inputs.macos-arm64-artifact-name }}
+          path: artifacts/macos-arm64
+
+      - name: Download macOS x86_64 Artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: ${{ inputs.macos-x86_64-artifact-name }}
+          path: artifacts/macos-x86_64
 
       - name: Download Android Artifact
         uses: actions/download-artifact@v6
@@ -37,12 +73,50 @@ jobs:
           PLUGINS_DIR="unity/xyz.zhuzeitou.qrcode/Plugins"
           
           echo "Organizing Windows binaries..."
-          if [ -f "artifacts/windows/bin/zzt_qrcode.dll" ]; then
+          if [ -f "artifacts/windows-x64/bin/zzt_qrcode.dll" ]; then
             mkdir -p "$PLUGINS_DIR/Windows/x86_64"
-            cp "artifacts/windows/bin/zzt_qrcode.dll" "$PLUGINS_DIR/Windows/x86_64/"
+            cp "artifacts/windows-x64/bin/zzt_qrcode.dll" "$PLUGINS_DIR/Windows/x86_64/"
             echo "✅ Windows x64 added"
           else
-            echo "❌ Windows binary not found in artifacts"
+            echo "❌ Windows x64 binary not found in artifacts"
+            exit 1
+          fi
+          
+          if [ -f "artifacts/windows-x86/bin/zzt_qrcode.dll" ]; then
+            mkdir -p "$PLUGINS_DIR/Windows/x86"
+            cp "artifacts/windows-x86/bin/zzt_qrcode.dll" "$PLUGINS_DIR/Windows/x86/"
+            echo "✅ Windows x86 added"
+          else
+            echo "❌ Windows x86 binary not found in artifacts"
+            exit 1
+          fi
+          
+          echo "Organizing Linux binaries..."
+          if [ -f "artifacts/linux/lib/libzzt_qrcode.so" ]; then
+            mkdir -p "$PLUGINS_DIR/Linux/x86_64"
+            cp "artifacts/linux/lib/libzzt_qrcode.so" "$PLUGINS_DIR/Linux/x86_64/"
+            echo "✅ Linux x86_64 added"
+          else
+            echo "❌ Linux binary not found in artifacts"
+            exit 1
+          fi
+          
+          echo "Organizing macOS binaries..."
+          if [ -f "artifacts/macos-arm64/lib/libzzt_qrcode.dylib" ]; then
+            mkdir -p "$PLUGINS_DIR/macOS/arm64"
+            cp "artifacts/macos-arm64/lib/libzzt_qrcode.dylib" "$PLUGINS_DIR/macOS/arm64/"
+            echo "✅ macOS arm64 added"
+          else
+            echo "❌ macOS arm64 binary not found in artifacts"
+            exit 1
+          fi
+          
+          if [ -f "artifacts/macos-x86_64/lib/libzzt_qrcode.dylib" ]; then
+            mkdir -p "$PLUGINS_DIR/macOS/x86_64"
+            cp "artifacts/macos-x86_64/lib/libzzt_qrcode.dylib" "$PLUGINS_DIR/macOS/x86_64/"
+            echo "✅ macOS x86_64 added"
+          else
+            echo "❌ macOS x86_64 binary not found in artifacts"
             exit 1
           fi
           
@@ -66,6 +140,26 @@ jobs:
           # Check Windows meta
           if [ -f "$PLUGINS_DIR/Windows/x86_64/zzt_qrcode.dll" ] && [ ! -f "$PLUGINS_DIR/Windows/x86_64/zzt_qrcode.dll.meta" ]; then
             echo "❌ Missing meta for Windows/x86_64/zzt_qrcode.dll"
+            MISSING_META=1
+          fi
+          if [ -f "$PLUGINS_DIR/Windows/x86/zzt_qrcode.dll" ] && [ ! -f "$PLUGINS_DIR/Windows/x86/zzt_qrcode.dll.meta" ]; then
+            echo "❌ Missing meta for Windows/x86/zzt_qrcode.dll"
+            MISSING_META=1
+          fi
+          
+          # Check Linux meta
+          if [ -f "$PLUGINS_DIR/Linux/x86_64/libzzt_qrcode.so" ] && [ ! -f "$PLUGINS_DIR/Linux/x86_64/libzzt_qrcode.so.meta" ]; then
+            echo "❌ Missing meta for Linux/x86_64/libzzt_qrcode.so"
+            MISSING_META=1
+          fi
+          
+          # Check macOS meta
+          if [ -f "$PLUGINS_DIR/macOS/arm64/libzzt_qrcode.dylib" ] && [ ! -f "$PLUGINS_DIR/macOS/arm64/libzzt_qrcode.dylib.meta" ]; then
+            echo "❌ Missing meta for macOS/arm64/libzzt_qrcode.dylib"
+            MISSING_META=1
+          fi
+          if [ -f "$PLUGINS_DIR/macOS/x86_64/libzzt_qrcode.dylib" ] && [ ! -f "$PLUGINS_DIR/macOS/x86_64/libzzt_qrcode.dylib.meta" ]; then
+            echo "❌ Missing meta for macOS/x86_64/libzzt_qrcode.dylib"
             MISSING_META=1
           fi
           
