@@ -48,7 +48,7 @@ jobs:
       - name: Upload temporary artifact
         uses: actions/upload-artifact@v6
         with:
-          name: ios-framework-${{ matrix.platform }}
+          name: _tmp-ios-framework-${{ matrix.platform }}
           path: install_output/
           retention-days: 1
 
@@ -60,7 +60,7 @@ jobs:
       - name: Download all frameworks
         uses: actions/download-artifact@v8.0.1
         with:
-          pattern: ios-framework-*
+          pattern: _tmp-ios-framework-*
           path: frameworks
 
       - name: Create XCFramework
@@ -68,16 +68,16 @@ jobs:
           # Combine simulator frameworks into one universal framework
           # Note: The framework directory name must match the binary name inside it (zzt_qrcode)
           mkdir -p universal
-          cp -r frameworks/ios-framework-SIMULATORARM64/zzt_qrcode.framework universal/
+          cp -r frameworks/_tmp-ios-framework-SIMULATORARM64/zzt_qrcode.framework universal/
           lipo -create \
-            frameworks/ios-framework-SIMULATOR64/zzt_qrcode.framework/zzt_qrcode \
-            frameworks/ios-framework-SIMULATORARM64/zzt_qrcode.framework/zzt_qrcode \
+            frameworks/_tmp-ios-framework-SIMULATOR64/zzt_qrcode.framework/zzt_qrcode \
+            frameworks/_tmp-ios-framework-SIMULATORARM64/zzt_qrcode.framework/zzt_qrcode \
             -output universal/zzt_qrcode.framework/zzt_qrcode
 
           # Create the final XCFramework with Device and Universal Simulator slices
           mkdir -p output
           xcodebuild -create-xcframework \
-            -framework frameworks/ios-framework-OS64/zzt_qrcode.framework \
+            -framework frameworks/_tmp-ios-framework-OS64/zzt_qrcode.framework \
             -framework universal/zzt_qrcode.framework \
             -output output/zzt_qrcode.xcframework
 
@@ -86,3 +86,8 @@ jobs:
         with:
           name: ios-xcframework
           path: output/
+
+      - name: Cleanup temporary artifacts
+        uses: geekyeggo/delete-artifact@v5
+        with:
+          name: _tmp-ios-framework-*

@@ -8,8 +8,22 @@ on:
         value: "android-core-libs"
 
 jobs:
-  build-native:
-    name: Build Native Core (all ABIs)
+  build-abi:
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, armeabi-v7a, x86, x86_64]
+        include:
+          - abi: arm64-v8a
+            extra_args: ""
+          - abi: armeabi-v7a
+            extra_args: "-DANDROID_ARM_NEON=ON"
+          - abi: x86
+            extra_args: ""
+          - abi: x86_64
+            extra_args: ""
+
+    name: Build Android ${{ matrix.abi }}
     runs-on: ubuntu-latest
 
     steps:
@@ -26,72 +40,69 @@ jobs:
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2.21
         with:
-          key: ccache-android-native
+          key: ccache-android-native-${{ matrix.abi }}
 
-      - name: Build arm64-v8a
+      - name: Build ${{ matrix.abi }}
         run: |
-          cmake -B build-arm64-v8a -G Ninja \
+          cmake -B build -G Ninja \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
-            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_ABI=${{ matrix.abi }} \
             -DANDROID_PLATFORM=android-24 \
             -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON \
+            ${{ matrix.extra_args }} \
             -DCMAKE_BUILD_TYPE=Release
-          cmake --build build-arm64-v8a -j$(nproc)
-          cmake --install build-arm64-v8a --prefix ./install_android/arm64-v8a
+          cmake --build build -j$(nproc)
+          cmake --install build --prefix ./install_android/${{ matrix.abi }}
 
-      - name: Build armeabi-v7a
-        run: |
-          cmake -B build-armeabi-v7a -G Ninja \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
-            -DANDROID_ABI=armeabi-v7a \
-            -DANDROID_ARM_NEON=ON \
-            -DANDROID_PLATFORM=android-24 \
-            -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON \
-            -DCMAKE_BUILD_TYPE=Release
-          cmake --build build-armeabi-v7a -j$(nproc)
-          cmake --install build-armeabi-v7a --prefix ./install_android/armeabi-v7a
+      - name: Upload temporary artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: _tmp-android-abi-${{ matrix.abi }}
+          path: install_android/
+          retention-days: 1
 
-      - name: Build x86
-        run: |
-          cmake -B build-x86 -G Ninja \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
-            -DANDROID_ABI=x86 \
-            -DANDROID_PLATFORM=android-24 \
-            -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON \
-            -DCMAKE_BUILD_TYPE=Release
-          cmake --build build-x86 -j$(nproc)
-          cmake --install build-x86 --prefix ./install_android/x86
+  assemble-android-libs:
+    needs: build-abi
+    runs-on: ubuntu-latest
+    name: Assemble Android Native Libs
+    steps:
+      - name: Download all ABIs
+        uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: _tmp-android-abi-*
+          path: install_android
 
-      - name: Build x86_64
+      - name: Verify and Organize
         run: |
-          cmake -B build-x86_64 -G Ninja \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
-            -DANDROID_ABI=x86_64 \
-            -DANDROID_PLATFORM=android-24 \
-            -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON \
-            -DCMAKE_BUILD_TYPE=Release
-          cmake --build build-x86_64 -j$(nproc)
-          cmake --install build-x86_64 --prefix ./install_android/x86_64
-
-      - name: Verify artifacts
-        run: |
+          ls -R install_android/
           for abi in arm64-v8a armeabi-v7a x86 x86_64; do
             echo "Checking $abi..."
-            ls -la install_android/$abi/lib/
-            test -f install_android/$abi/lib/libzzt_qrcode.so
-            echo "✅ $abi: libzzt_qrcode.so found"
+            # download-artifact with pattern might create subdirectories named after the artifact
+            # We want to ensure the final structure is install_android/<abi>/...
+            # The upload for each abi was install_android/ which contains <abi>/
+            # So download path 'install_android' will result in:
+            # install_android/_tmp-android-abi-arm64-v8a/arm64-v8a/...
+            
+            SOURCE_DIR="install_android/_tmp-android-abi-$abi/$abi"
+            if [ -d "$SOURCE_DIR" ]; then
+              mkdir -p final_install/$abi
+              cp -r $SOURCE_DIR/* final_install/$abi/
+              echo "✅ $abi organized"
+            else
+              echo "❌ $abi not found in $SOURCE_DIR"
+              exit 1
+            fi
           done
 
       - name: Upload Native Artifacts
         uses: actions/upload-artifact@v6
         with:
           name: android-core-libs
-          path: install_android/
+          path: final_install/
+
+      - name: Cleanup temporary artifacts
+        uses: geekyeggo/delete-artifact@v5
+        with:
+          name: _tmp-android-abi-*
