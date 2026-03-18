@@ -82,7 +82,7 @@ if (CMAKE_BUILD_TYPE STREQUAL "Release")
     endif ()
 
     if (NOT ANDROID OR CMAKE_ANDROID_NDK_VERSION)
-        set_property(TARGET zzt_qrcode PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+        set_target_properties(zzt_qrcode PROPERTIES INTERPROCEDURAL_OPTIMIZATION TRUE)
     endif ()
 endif ()
 
