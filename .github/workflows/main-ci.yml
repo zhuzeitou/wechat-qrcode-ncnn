@@ -29,6 +29,9 @@ jobs:
   linux-build:
     uses: ./.github/workflows/reusable-linux.yml
 
+  ios-build:
+    uses: ./.github/workflows/reusable-ios.yml
+
   android-native-build:
     uses: ./.github/workflows/reusable-android-native.yml
 

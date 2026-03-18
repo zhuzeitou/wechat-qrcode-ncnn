@@ -69,7 +69,7 @@ if (CMAKE_BUILD_TYPE STREQUAL "Release")
 
     if (APPLE)
         target_link_options(zzt_qrcode PRIVATE "LINKER:-x")
-    endif()    
+    endif()
 
     if (UNIX AND NOT APPLE)
         target_link_options(zzt_qrcode PRIVATE "LINKER:--exclude-libs,ALL")
@@ -86,17 +86,45 @@ if (CMAKE_BUILD_TYPE STREQUAL "Release")
     endif ()
 endif ()
 
+if (IOS)
+    file(GLOB_RECURSE zzt_public_headers ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h)
+    foreach(_header ${zzt_public_headers})
+        file(RELATIVE_PATH _rel_path "${CMAKE_CURRENT_SOURCE_DIR}/include" "${_header}")
+        get_filename_component(_rel_dir "${_rel_path}" DIRECTORY)
+        if(_rel_dir STREQUAL "")
+            set_source_files_properties("${_header}" PROPERTIES MACOSX_PACKAGE_LOCATION "Headers")
+        else()
+            set_source_files_properties("${_header}" PROPERTIES MACOSX_PACKAGE_LOCATION "Headers/${_rel_dir}")
+        endif()
+    endforeach()
+    target_sources(zzt_qrcode PRIVATE ${zzt_public_headers})
+    set_target_properties(zzt_qrcode PROPERTIES
+            FRAMEWORK TRUE
+            MACOSX_FRAMEWORK_IDENTIFIER "xyz.zhuzeitou.qrcode"
+            MACOSX_FRAMEWORK_BUNDLE_VERSION "1.0.0"
+            MACOSX_FRAMEWORK_SHORT_VERSION_STRING "1.0.0"
+            XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
+    )
+endif ()
+
 # --- Installation Configuration ---
-include(GNUInstallDirs)
+if (IOS)
+    install(TARGETS zzt_qrcode
+            EXPORT zzt_qrcode_Targets
+            FRAMEWORK DESTINATION .
+    )
+else ()
+    include(GNUInstallDirs)
 
-install(TARGETS zzt_qrcode
-        EXPORT zzt_qrcode_Targets
-        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-)
+    install(TARGETS zzt_qrcode
+            EXPORT zzt_qrcode_Targets
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    )
 
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-        FILES_MATCHING PATTERN "*.h"
-)
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+            FILES_MATCHING PATTERN "*.h"
+    )
+endif ()

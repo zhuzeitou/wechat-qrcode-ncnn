@@ -1,0 +1,86 @@
+name: Reusable iOS Build
+
+on:
+  workflow_call:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: OS64
+            arch: arm64
+          - platform: SIMULATOR64
+            arch: x86_64
+          - platform: SIMULATORARM64
+            arch: arm64-sim
+
+    name: iOS ${{ matrix.platform }}
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.21
+        with:
+          key: ccache-ios-${{ matrix.platform }}
+
+      - name: Configure
+        run: >
+          cmake -B build -G Xcode
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_TOOLCHAIN_FILE=core/third_party/ncnn/toolchains/ios.toolchain.cmake
+          -DPLATFORM=${{ matrix.platform }}
+          -DZZT_BUILD_TESTS=OFF
+
+      - name: Build
+        run: cmake --build build --config Release -j$(sysctl -n hw.ncpu)
+
+      - name: Install
+        run: cmake --install build --config Release --prefix install_output
+
+      - name: Upload temporary artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ios-framework-${{ matrix.platform }}
+          path: install_output/zzt_qrcode.framework
+          retention-days: 1
+
+  package-xcframework:
+    needs: build
+    runs-on: macos-latest
+    name: Package XCFramework
+    steps:
+      - name: Download all frameworks
+        uses: actions/download-artifact@v6
+        with:
+          pattern: ios-framework-*
+          path: frameworks
+
+      - name: Create XCFramework
+        run: |
+          # Combine simulator frameworks into one universal framework
+          # Note: The framework directory name must match the binary name inside it (zzt_qrcode)
+          mkdir -p universal
+          cp -r frameworks/ios-framework-SIMULATORARM64/zzt_qrcode.framework universal/
+          lipo -create \
+            frameworks/ios-framework-SIMULATOR64/zzt_qrcode.framework/zzt_qrcode \
+            frameworks/ios-framework-SIMULATORARM64/zzt_qrcode.framework/zzt_qrcode \
+            -output universal/zzt_qrcode.framework/zzt_qrcode
+
+          # Create the final XCFramework with Device and Universal Simulator slices
+          xcodebuild -create-xcframework \
+            -framework frameworks/ios-framework-OS64/zzt_qrcode.framework \
+            -framework universal/zzt_qrcode.framework \
+            -output zzt_qrcode.xcframework
+
+      - name: Upload XCFramework
+        uses: actions/upload-artifact@v6
+        with:
+          name: ios-xcframework
+          path: zzt_qrcode.xcframework
