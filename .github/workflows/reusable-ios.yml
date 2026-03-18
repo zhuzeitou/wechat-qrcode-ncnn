@@ -75,13 +75,14 @@ jobs:
             -output universal/zzt_qrcode.framework/zzt_qrcode
 
           # Create the final XCFramework with Device and Universal Simulator slices
+          mkdir -p output
           xcodebuild -create-xcframework \
             -framework frameworks/ios-framework-OS64/zzt_qrcode.framework \
             -framework universal/zzt_qrcode.framework \
-            -output zzt_qrcode.xcframework
+            -output output/zzt_qrcode.xcframework
 
       - name: Upload XCFramework
         uses: actions/upload-artifact@v6
         with:
           name: ios-xcframework
-          path: zzt_qrcode.xcframework
+          path: output/
