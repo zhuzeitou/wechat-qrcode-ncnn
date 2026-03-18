@@ -3,6 +3,7 @@ target_link_libraries(qrcodetest PRIVATE zzt_qrcode)
 
 set_target_properties(qrcodetest PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:zzt_qrcode>
+    MACOSX_BUNDLE OFF
 )
 
 if (CMAKE_BUILD_TYPE STREQUAL "Release")
