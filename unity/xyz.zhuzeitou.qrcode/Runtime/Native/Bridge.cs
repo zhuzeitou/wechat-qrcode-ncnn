@@ -5,7 +5,11 @@ namespace ZZT.QRCode.Native
 {
     internal class Bridge
     {
+#if UNITY_IOS && !UNITY_EDITOR
+        private const string DLLName = "__Internal";
+#else
         private const string DLLName = "zzt_qrcode";
+#endif
 
         internal struct NativeDetector
         {
