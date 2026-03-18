@@ -5,6 +5,7 @@
 ![Linux](https://img.shields.io/badge/platform-Linux-orange.svg)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)
 ![Android](https://img.shields.io/badge/platform-Android-green.svg)
+![iOS](https://img.shields.io/badge/platform-iOS-lightgrey.svg)
 ![Unity](https://img.shields.io/badge/platform-Unity-black.svg)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![CI](https://github.com/zhuzeitou/wechat-qrcode-ncnn/actions/workflows/main-ci.yml/badge.svg)
@@ -21,7 +22,7 @@ This makes the library significantly more lightweight and easier to integrate in
 *   **Easy Integration**: Pure C API (`extern "C"`) for seamless FFI integration across languages.
 *   **Thread-Safe**: Handle-based architecture with read-write locks ensures safe concurrent access.
 *   **Robust**: Inherits the excellent detection capabilities of WeChat QRCode for complex scenarios (blurred, small, non-standard QRCodes).
-*   **Cross-Platform**: Supports Windows, macOS, Linux, Android, and Unity (via C/C++ API).
+*   **Cross-Platform**: Supports Windows, macOS, Linux, Android, iOS, and Unity (via C/C++ API).
 
 ## Prerequisites
 
@@ -31,6 +32,7 @@ To build this project, you need:
 *   **Ninja** (Recommended build tool)
 *   **C++ Compiler** (supporting C++17)
 *   **Android NDK** (for Android build)
+*   **Xcode / macOS** (for macOS and iOS build)
 *   **Visual Studio** or **MinGW** (for Windows build)
 
 ## Build Instructions
@@ -144,6 +146,47 @@ lipo -create \
     -output ./install_mac/universal/lib/libzzt_qrcode.dylib
 ```
 
+### iOS (XCFramework / Framework)
+
+For iOS, we recommend building an **XCFramework** specifically for multi-architecture support (Device + Simulator). However, you can also use a standard **.framework** if you only need a single architecture (e.g., only for the device).
+
+```bash
+# 1. Build for iOS Device (arm64)
+cmake -B build-ios-os64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE=core/third_party/ncnn/toolchains/ios.toolchain.cmake \
+    -DPLATFORM=OS64
+cmake --build build-ios-os64 -j 4
+cmake --install build-ios-os64 --prefix ./install_ios/os64
+
+# 2. Build for iOS Simulator (Apple Silicon)
+cmake -B build-ios-sim-arm64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE=core/third_party/ncnn/toolchains/ios.toolchain.cmake \
+    -DPLATFORM=SIMULATORARM64
+cmake --build build-ios-sim-arm64 -j 4
+cmake --install build-ios-sim-arm64 --prefix ./install_ios/sim-arm64
+
+# 3. Build for iOS Simulator (Intel)
+cmake -B build-ios-sim-x64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE=core/third_party/ncnn/toolchains/ios.toolchain.cmake \
+    -DPLATFORM=SIMULATOR64
+cmake --build build-ios-sim-x64 -j 4
+cmake --install build-ios-sim-x64 --prefix ./install_ios/sim-x64
+
+# 4. Create Universal Simulator Framework (Merge sim slices)
+mkdir -p ./install_ios/universal
+cp -r ./install_ios/sim-arm64/zzt_qrcode.framework ./install_ios/universal/
+lipo -create \
+    ./install_ios/sim-arm64/zzt_qrcode.framework/zzt_qrcode \
+    ./install_ios/sim-x64/zzt_qrcode.framework/zzt_qrcode \
+    -output ./install_ios/universal/zzt_qrcode.framework/zzt_qrcode
+
+# 5. Create the final XCFramework
+xcodebuild -create-xcframework \
+    -framework ./install_ios/os64/zzt_qrcode.framework \
+    -framework ./install_ios/universal/zzt_qrcode.framework \
+    -output ./install_ios/zzt_qrcode.xcframework
+```
+
 ### Android
 
 **Option 1: Android Studio (Recommended)**
@@ -247,6 +290,10 @@ To use this library in Unity, you need to compile the native plugins (`.dll` / `
         *   `armeabi-v7a` -> `unity/xyz.zhuzeitou.qrcode/Plugins/Android/armeabi-v7a/`
         *   `x86` -> `unity/xyz.zhuzeitou.qrcode/Plugins/Android/x86/`
         *   `x86_64` -> `unity/xyz.zhuzeitou.qrcode/Plugins/Android/x86_64/`
+
+5.  **Build for iOS (XCFramework / Framework)**:
+    *   **Option A (XCFramework)**: Build `zzt_qrcode.xcframework` using the [iOS](#ios-xcframework-framework) section above. Copy the folder to `unity/xyz.zhuzeitou.qrcode/Plugins/iOS/zzt_qrcode.xcframework`.
+    *   **Option B (.framework)**: If you only need a single architecture (e.g., for device testing), you can just copy the individual `zzt_qrcode.framework` from `install_ios/<arch>/` to `unity/xyz.zhuzeitou.qrcode/Plugins/iOS/zzt_qrcode.framework`. **Note**: Since the project only provides a `.meta` file for the XCFramework, you will need to manually configure the platform settings (iOS, Add to Embedded Binaries: true) for the `.framework` in the Unity Inspector.
 
 ## Usage
 
@@ -429,7 +476,8 @@ The project is organized into the following directories:
 *   [x] **Linux**: Tested and supported.
 *   [x] **Android**: Tested and supported.
 *   [x] **macOS**: Tested and supported.
-*   [ ] **iOS**: Planned.
+*   [x] **iOS**: Framework supported (needs more testing).
+*   [ ] **iOS Wrapper**: Objective-C / Swift wrapper.
 
 ## Acknowledgements
 
