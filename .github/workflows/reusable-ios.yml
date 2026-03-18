@@ -34,9 +34,10 @@ jobs:
         run: >
           cmake -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           -DCMAKE_TOOLCHAIN_FILE=core/third_party/ncnn/toolchains/ios.toolchain.cmake
           -DPLATFORM=${{ matrix.platform }}
-          -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         run: cmake --build build -j$(sysctl -n hw.ncpu)
