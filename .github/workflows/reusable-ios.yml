@@ -50,7 +50,6 @@ jobs:
         with:
           name: _tmp-ios-framework-${{ matrix.platform }}
           path: install_output/
-          retention-days: 1
 
   package-xcframework:
     needs: build
@@ -88,6 +87,7 @@ jobs:
           path: output/
 
       - name: Cleanup temporary artifacts
-        uses: geekyeggo/delete-artifact@v5
+        if: always()
+        uses: geekyeggo/delete-artifact@v6
         with:
           name: _tmp-ios-framework-*

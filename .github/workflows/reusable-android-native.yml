@@ -61,7 +61,6 @@ jobs:
         with:
           name: _tmp-android-abi-${{ matrix.abi }}
           path: install_android/
-          retention-days: 1
 
   assemble-android-libs:
     needs: build-abi
@@ -103,6 +102,7 @@ jobs:
           path: final_install/
 
       - name: Cleanup temporary artifacts
-        uses: geekyeggo/delete-artifact@v5
+        if: always()
+        uses: geekyeggo/delete-artifact@v6
         with:
           name: _tmp-android-abi-*
