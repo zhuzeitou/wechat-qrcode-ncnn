@@ -21,6 +21,9 @@ on:
       android-artifact-name:
         required: true
         type: string
+      ios-artifact-name:
+        required: true
+        type: string
 
 jobs:
   package:
@@ -66,6 +69,12 @@ jobs:
         with:
           name: ${{ inputs.android-artifact-name }}
           path: artifacts/android
+
+      - name: Download iOS Artifact
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: ${{ inputs.ios-artifact-name }}
+          path: artifacts/ios
 
       - name: Organize Artifacts
         run: |
@@ -132,6 +141,16 @@ jobs:
             fi
           done
 
+          echo "Organizing iOS binaries..."
+          if [ -d "artifacts/ios/zzt_qrcode.xcframework" ]; then
+            mkdir -p "$PLUGINS_DIR/iOS"
+            cp -r "artifacts/ios/zzt_qrcode.xcframework" "$PLUGINS_DIR/iOS/"
+            echo "✅ iOS XCFramework added"
+          else
+            echo "❌ iOS XCFramework not found in artifacts"
+            exit 1
+          fi
+
       - name: Verify Meta Files
         run: |
           PLUGINS_DIR="unity/xyz.zhuzeitou.qrcode/Plugins"
@@ -170,6 +189,12 @@ jobs:
               MISSING_META=1
             fi
           done
+
+          # Check iOS meta
+          if [ -d "$PLUGINS_DIR/iOS/zzt_qrcode.xcframework" ] && [ ! -f "$PLUGINS_DIR/iOS/zzt_qrcode.xcframework.meta" ]; then
+            echo "❌ Missing meta for iOS/zzt_qrcode.xcframework"
+            MISSING_META=1
+          fi
           
           if [ $MISSING_META -eq 1 ]; then
             echo "Some .meta files are missing in the repository. Please ensure they are committed."
