@@ -48,7 +48,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: ios-framework-${{ matrix.platform }}
-          path: install_output/zzt_qrcode.framework
+          path: install_output/
           retention-days: 1
 
   package-xcframework:
@@ -57,7 +57,7 @@ jobs:
     name: Package XCFramework
     steps:
       - name: Download all frameworks
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8.0.1
         with:
           pattern: ios-framework-*
           path: frameworks
