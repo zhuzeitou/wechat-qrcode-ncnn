@@ -32,17 +32,17 @@ jobs:
 
       - name: Configure
         run: >
-          cmake -B build -G Xcode
+          cmake -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_TOOLCHAIN_FILE=core/third_party/ncnn/toolchains/ios.toolchain.cmake
           -DPLATFORM=${{ matrix.platform }}
-          -DZZT_BUILD_TESTS=OFF
+          -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
-        run: cmake --build build --config Release -j$(sysctl -n hw.ncpu)
+        run: cmake --build build -j$(sysctl -n hw.ncpu)
 
       - name: Install
-        run: cmake --install build --config Release --prefix install_output
+        run: cmake --install build --prefix install_output
 
       - name: Upload temporary artifact
         uses: actions/upload-artifact@v6
