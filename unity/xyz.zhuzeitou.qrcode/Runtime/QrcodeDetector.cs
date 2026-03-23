@@ -356,6 +356,7 @@ namespace ZZT.QRCode
 
                 FlipVertical(MemoryMarshal.AsBytes(data.Span), width, height, 4);
                 pixels = data;
+                format = PixelFormat.RGBA;
                 return true;
             }
         }
