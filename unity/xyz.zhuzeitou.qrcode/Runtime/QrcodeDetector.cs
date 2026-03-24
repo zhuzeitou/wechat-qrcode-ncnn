@@ -195,13 +195,12 @@ namespace ZZT.QRCode
                 return QrcodeResults.FromErrorCode(QrcodeResults.ErrorCode.ErrorInvalidArgument);
             }
 
-            int expectedStride = width * GetBpp(format);
-            if (stride > 0 && stride < expectedStride)
+            int rowBytes = width * GetBpp(format);
+            if (stride > 0 && stride < rowBytes)
             {
-                Debug.LogWarning($"Stride {stride} may be too small, expected {expectedStride}");
+                Debug.LogWarning($"Stride {stride} may be too small, expected at least {rowBytes}");
             }
 
-            int rowBytes = width * GetBpp(format);
             int exactStride = stride <= 0 ? rowBytes : stride;
             int pixelBytes = pixels.Length;
             int expectedPixelBytes = exactStride * (height - 1) + rowBytes;
