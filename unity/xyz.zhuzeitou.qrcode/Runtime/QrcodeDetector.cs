@@ -1,11 +1,11 @@
 ﻿#define ZZT_QRCODE_DEBUG
 
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
-using Unity.Collections;
 using UnityEngine;
 using ZZT.QRCode.Native;
 using Debug = UnityEngine.Debug;
@@ -134,7 +134,7 @@ namespace ZZT.QRCode
             await GlobalSemaphore.WaitAsync();
             try
             {
-                return DetectAndDecodeSync(path);
+                return await Task.Run(() => DetectAndDecodeSync(path));
             }
             finally
             {
@@ -179,7 +179,7 @@ namespace ZZT.QRCode
             await GlobalSemaphore.WaitAsync();
             try
             {
-                return DetectAndDecodeSync(data);
+                return await Task.Run(() => DetectAndDecodeSync(data));
             }
             finally
             {
@@ -188,7 +188,7 @@ namespace ZZT.QRCode
         }
 
         private QrcodeResults DetectAndDecodeInternal(Span<byte> pixels, PixelFormat format, int width,
-            int height, int stride)
+            int height, int stride, bool flipVertical = false)
         {
             if (pixels.IsEmpty || width <= 0 || height <= 0)
             {
@@ -201,12 +201,40 @@ namespace ZZT.QRCode
                 Debug.LogWarning($"Stride {stride} may be too small, expected {expectedStride}");
             }
 
-            int exactStride = stride <= 0 ? width * GetBpp(format) : stride;
+            int rowBytes = width * GetBpp(format);
+            int exactStride = stride <= 0 ? rowBytes : stride;
             int pixelBytes = pixels.Length;
-            if (pixelBytes < exactStride * height)
+            int expectedPixelBytes = exactStride * (height - 1) + rowBytes;
+            if (pixelBytes < expectedPixelBytes)
             {
-                Debug.LogError($"Invalid pixel data size: {pixelBytes}, expected: {exactStride * height}");
+                Debug.LogError($"Invalid pixel data size: {pixelBytes}, expected: {expectedPixelBytes}");
                 return QrcodeResults.FromErrorCode(QrcodeResults.ErrorCode.ErrorInvalidArgument);
+            }
+
+            if (flipVertical)
+            {
+                byte[] rowBuffer = ArrayPool<byte>.Shared.Rent(rowBytes);
+                Span<byte> tempRow = rowBuffer.AsSpan(0, rowBytes);
+
+                try
+                {
+                    for (int y = 0; y < height / 2; y++)
+                    {
+                        int srcOffset = (height - 1 - y) * exactStride;
+                        int dstOffset = y * exactStride;
+
+                        Span<byte> srcRow = pixels.Slice(srcOffset, rowBytes);
+                        Span<byte> dstRow = pixels.Slice(dstOffset, rowBytes);
+
+                        srcRow.CopyTo(tempRow);
+                        dstRow.CopyTo(srcRow);
+                        tempRow.CopyTo(dstRow);
+                    }
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(rowBuffer);
+                }
             }
 
 #if ZZT_QRCODE_DEBUG
@@ -261,7 +289,7 @@ namespace ZZT.QRCode
             await GlobalSemaphore.WaitAsync();
             try
             {
-                return DetectAndDecodeSync(pixels, format, width, height, stride);
+                return await Task.Run(() => DetectAndDecodeSync(pixels, format, width, height, stride));
             }
             finally
             {
@@ -269,12 +297,12 @@ namespace ZZT.QRCode
             }
         }
 
-        private bool GetTextureData(Texture2D texture, out NativeArray<byte> nativeArray, out Color32[] colors,
+        private bool GetTextureData(Texture2D texture, out byte[] raw, out Color32[] colors,
             out int width, out int height, out PixelFormat format)
         {
             width = 0;
             height = 0;
-            nativeArray = default;
+            raw = null;
             colors = null;
             format = default;
 
@@ -289,7 +317,7 @@ namespace ZZT.QRCode
                 Debug.LogError("Texture is not readable");
                 return false;
             }
-            
+
 #if ZZT_QRCODE_DEBUG
             Debug.Log(
                 $"DetectAndDecode texture read {Now} format={texture.format} width={texture.width} height={texture.height}");
@@ -299,7 +327,7 @@ namespace ZZT.QRCode
             height = texture.height;
             if (FormatMap.TryGetValue(texture.format, out format))
             {
-                nativeArray = texture.GetRawTextureData<byte>();
+                raw = texture.GetRawTextureData();
 
 #if ZZT_QRCODE_DEBUG
                 Debug.Log($"DetectAndDecode texture read raw done {Now}");
@@ -320,29 +348,6 @@ namespace ZZT.QRCode
             }
         }
 
-        private static void FlipVertical(Span<byte> pixels, int width, int height, int bpp, out NativeArray<byte> output)
-        {
-#if ZZT_QRCODE_DEBUG
-            Debug.Log($"FlipVertical {Now}");
-#endif
-            
-            int rowBytes = width * bpp;
-            
-            output = new NativeArray<byte>(rowBytes * height, Allocator.Temp);
-            Span<byte> outputSpan = output.AsSpan();
-
-            for (int y = 0; y < height; y++)
-            {
-                int srcOffset = (height - 1 - y) * rowBytes;
-                int dstOffset = y * rowBytes;
-                pixels.Slice(srcOffset, rowBytes).CopyTo(outputSpan.Slice(dstOffset, rowBytes));
-            }
-
-#if ZZT_QRCODE_DEBUG
-            Debug.Log($"FlipVertical done {Now}");
-#endif
-        }
-        
         /// <summary>
         /// Detects and decodes a QR code from a Texture2D synchronously.
         /// <para>
@@ -356,22 +361,17 @@ namespace ZZT.QRCode
         /// <returns>The detection results.</returns>
         public QrcodeResults DetectAndDecodeSync(Texture2D texture)
         {
-            if (GetTextureData(texture, out var nativeArray, out var colors, out var width, out var height,
+            if (GetTextureData(texture, out var raw, out var colors, out var width, out var height,
                     out var format))
             {
-                NativeArray<byte> pixels = default;
-                if (nativeArray.IsCreated)
+                if (raw != null)
                 {
-                    FlipVertical(nativeArray.AsSpan(), width, height, GetBpp(format), out pixels);
+                    return DetectAndDecodeInternal(raw, format, width, height, 0, true);
                 }
-                else if (colors != null)
+
+                if (colors != null)
                 {
-                    FlipVertical(MemoryMarshal.AsBytes(colors.AsSpan()), width, height, 4, out pixels);  
-                }
-                
-                using (pixels)
-                {
-                    return DetectAndDecodeInternal(pixels, format, width, height, 0);
+                    return DetectAndDecodeInternal(MemoryMarshal.AsBytes(colors.AsSpan()), format, width, height, 0, true);
                 }
             }
 
@@ -391,27 +391,26 @@ namespace ZZT.QRCode
         /// <returns>A task that represents the asynchronous operation. The task result contains the detection results.</returns>
         public async Task<QrcodeResults> DetectAndDecode(Texture2D texture)
         {
-            if (GetTextureData(texture, out var nativeArray, out var colors, out var width, out var height,
+            if (GetTextureData(texture, out var raw, out var colors, out var width, out var height,
                     out var format))
             {
                 await GlobalSemaphore.WaitAsync();
-
                 try
                 {
-                    NativeArray<byte> pixels = default;
-                    if (nativeArray.IsCreated)
+                    return await Task.Run(() =>
                     {
-                        FlipVertical(nativeArray.AsSpan(), width, height, GetBpp(format), out pixels);
-                    }
-                    else if (colors != null)
-                    {
-                        FlipVertical(MemoryMarshal.AsBytes(colors.AsSpan()), width, height, 4, out pixels);
-                    }
+                        if (raw != null)
+                        {
+                            return DetectAndDecodeInternal(raw, format, width, height, 0, true);
+                        }
 
-                    using (pixels)
-                    {
-                        return DetectAndDecodeInternal(pixels, format, width, height, 0);
-                    }
+                        if (colors != null)
+                        {
+                            return DetectAndDecodeInternal(MemoryMarshal.AsBytes(colors.AsSpan()), format, width, height, 0, true);
+                        }
+
+                        return QrcodeResults.FromErrorCode(QrcodeResults.ErrorCode.ErrorInvalidArgument);
+                    });
                 }
                 finally
                 {
