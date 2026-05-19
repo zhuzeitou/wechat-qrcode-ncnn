@@ -65,26 +65,35 @@ public:
 
 private:
     static key_t generate_handle() {
-        static std::atomic<key_t> next_handle = []() -> key_t {
+        static std::atomic<key_t> counter{0};
+        static const key_t seed = []() -> key_t {
             auto now = std::chrono::steady_clock::now().time_since_epoch();
-            auto count = std::chrono::duration_cast<std::chrono::microseconds>(now).count();
+            auto count = std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
             return static_cast<key_t>(count);
         }();
 
-        constexpr int shift = 23;
-        constexpr key_t xor_key = (sizeof(key_t) == 8) ? static_cast<key_t>(0x9e3779b97f4a7c15ULL)
-                                                       : static_cast<key_t>(0x9e3779b9UL);
+        constexpr bool is64 = sizeof(key_t) == 8;
+        constexpr key_t M1 = is64
+            ? static_cast<key_t>(0xbf58476d1ce4e5b9ULL)
+            : static_cast<key_t>(0x85ebca6bUL);
+        constexpr key_t M2 = is64
+            ? static_cast<key_t>(0x94d049bb133111ebULL)
+            : static_cast<key_t>(0xc2b2ae35UL);
+        constexpr int S1 = is64 ? 30 : 16;
+        constexpr int S2 = is64 ? 27 : 13;
+        constexpr int S3 = is64 ? 31 : 16;
 
-        key_t raw = ++next_handle;
+        while (true) {
+            key_t x = ++counter;
 
-#ifdef __cpp_lib_bitops
-        key_t shifted = std::rotl(raw, shift);
-#else
-        constexpr int bits = sizeof(key_t) * 8;
-        constexpr int s = shift % bits;
-        key_t shifted = s == 0 ? raw : ((raw << s) | (raw >> (bits - s)));
-#endif
-        return shifted ^ xor_key;
+            // SplitMix-style bijective permutation
+            x = (x ^ (x >> S1)) * M1;
+            x = (x ^ (x >> S2)) * M2;
+            x = x ^ (x >> S3);
+
+            key_t handle = x ^ seed;
+            if (handle != 0) return handle;
+        }
     }
 
     static std::unordered_map<key_t, std::shared_ptr<T>>& handle_map() {
