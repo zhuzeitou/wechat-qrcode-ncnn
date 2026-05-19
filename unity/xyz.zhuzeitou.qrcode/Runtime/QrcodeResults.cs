@@ -75,6 +75,8 @@ namespace ZZT.QRCode
             ErrorInvalidArgument = -5,
             /// <summary>Out of memory</summary>
             ErrorOutOfMemory = -6,
+            /// <summary>Internal error (C++ exception)</summary>
+            ErrorInternal = -7,
         }
 
         /// <summary>Get detected QR codes. Empty if an error occurred.</summary>

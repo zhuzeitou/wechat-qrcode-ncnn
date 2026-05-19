@@ -59,6 +59,8 @@ class QrcodeResults private constructor(
         ERROR_INVALID_ARGUMENT(-5),
         /** Out of memory */
         ERROR_OUT_OF_MEMORY(-6),
+        /** Internal error (C++ exception) */
+        ERROR_INTERNAL(-7),
         /** Unknown error */
         ERROR_UNKNOWN(Int.MIN_VALUE);
 
