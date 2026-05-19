@@ -62,6 +62,7 @@ typedef enum {
     ZZT_QRCODE_ERROR_DECODE_FAILED = -4,     // Image decode failed
     ZZT_QRCODE_ERROR_INVALID_ARGUMENT = -5,  // Invalid argument (e.g. null pointer or invalid size)
     ZZT_QRCODE_ERROR_OUT_OF_MEMORY = -6,     // Out of memory
+    ZZT_QRCODE_ERROR_INTERNAL = -7,          // Internal error (C++ exception)
 } zzt_qrcode_error_t;
 
 /**
