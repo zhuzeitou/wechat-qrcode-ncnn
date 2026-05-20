@@ -117,18 +117,27 @@ jlong zzt_qrcode_detect_and_decode_path_jni(JNIEnv *env, jclass clazz, jlong nat
         return 0;
     }
 
-    const jchar *path_chars = (*env)->GetStringChars(env, path, NULL);
-    if (path_chars == NULL) {
+    jsize len = (*env)->GetStringLength(env, path);
+    if (len == 0) {
         last_error = ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
         return 0;
     }
 
+    jchar *buf = (jchar *) malloc(sizeof(jchar) * (len + 1));
+    if (buf == NULL) {
+        last_error = ZZT_QRCODE_ERROR_OUT_OF_MEMORY;
+        return 0;
+    }
+
+    (*env)->GetStringRegion(env, path, 0, len, buf);
+    buf[len] = '\0';
+
     zzt_qrcode_result_h result = NULL;
     last_error = zzt_qrcode_detect_and_decode_path_u16(
             (zzt_qrcode_detector_h) native_detector,
-            (const char16_t *) path_chars,
+            (const char16_t *) buf,
             &result);
-    (*env)->ReleaseStringChars(env, path, path_chars);
+    free(buf);
     return (jlong) result;
 }
 
@@ -138,8 +147,14 @@ jlong zzt_qrcode_detect_and_decode_data_jni(JNIEnv *env, jclass clazz, jlong nat
         return 0;
     }
 
-    jbyte *bytes = (*env)->GetByteArrayElements(env, data, NULL);
     jsize bytes_len = (*env)->GetArrayLength(env, data);
+    jbyte *bytes = (*env)->GetByteArrayElements(env, data, NULL);
+
+    if (bytes == NULL) {
+        last_error = ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
+        return 0;
+    }
+
     zzt_qrcode_result_h result = NULL;
     last_error = zzt_qrcode_detect_and_decode_data(
             (zzt_qrcode_detector_h) native_detector,
@@ -266,6 +281,9 @@ jstring zzt_qrcode_get_result_text_jni(JNIEnv *env, jclass clazz, jlong native_r
             } else {
                 int text_u16_len = utf8_to_utf16(text_u8, len, text_u16, len);
                 result = (*env)->NewString(env, text_u16, text_u16_len);
+                if (result == NULL) {
+                    last_error = ZZT_QRCODE_ERROR_INTERNAL;
+                }
             }
             free(text_u16);
         }
@@ -291,13 +309,28 @@ zzt_qrcode_get_result_points_jni(JNIEnv *env, jclass clazz, jlong native_result,
         last_error = zzt_qrcode_get_result_points((zzt_qrcode_result_h) native_result, index, points, &len);
         if (last_error == ZZT_QRCODE_OK && len > 0) {
             jclass cls = (*env)->FindClass(env, "[F");
-            points_array = (*env)->NewObjectArray(env, (jsize) len / 2, cls, NULL);
-            (*env)->DeleteLocalRef(env, cls);
-            for (int i = 0; i < len / 2; ++i) {
-                jfloatArray point_jarr = (*env)->NewFloatArray(env, 2);
-                (*env)->SetFloatArrayRegion(env, point_jarr, 0, 2, &points[i * 2]);
-                (*env)->SetObjectArrayElement(env, points_array, i, point_jarr);
-                (*env)->DeleteLocalRef(env, point_jarr);
+            if (cls == NULL) {
+                last_error = ZZT_QRCODE_ERROR_INTERNAL;
+            } else {
+                points_array = (*env)->NewObjectArray(env, (jsize) len / 2, cls, NULL);
+                if (points_array == NULL) {
+                    last_error = ZZT_QRCODE_ERROR_INTERNAL;
+                }
+                (*env)->DeleteLocalRef(env, cls);
+                if (points_array != NULL) {
+                    for (int i = 0; i < len / 2; ++i) {
+                        jfloatArray point_jarr = (*env)->NewFloatArray(env, 2);
+                        if (point_jarr == NULL) {
+                            last_error = ZZT_QRCODE_ERROR_INTERNAL;
+                            (*env)->DeleteLocalRef(env, points_array);
+                            points_array = NULL;
+                            break;
+                        }
+                        (*env)->SetFloatArrayRegion(env, point_jarr, 0, 2, &points[i * 2]);
+                        (*env)->SetObjectArrayElement(env, points_array, i, point_jarr);
+                        (*env)->DeleteLocalRef(env, point_jarr);
+                    }
+                }
             }
         }
         free(points);
