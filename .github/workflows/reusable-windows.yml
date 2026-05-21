@@ -35,12 +35,18 @@ jobs:
           arch: ${{ matrix.msvc_arch }}
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.21
+        if: matrix.arch != 'arm64'
+        uses: hendrikmuhs/ccache-action@v1.2.23
         with:
           key: ccache-windows-${{ matrix.arch }}
 
-      - name: Configure
+      - name: Configure with ccache
+        if: matrix.arch != 'arm64'
         run: cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Configure without ccache
+        if: matrix.arch == 'arm64'
+        run: cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         run: cmake --build build -j $env:NUMBER_OF_PROCESSORS

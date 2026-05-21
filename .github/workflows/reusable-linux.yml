@@ -40,7 +40,7 @@ jobs:
           sudo apt-get install -y ninja-build ${{ matrix.install_deps }}
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.21
+        uses: hendrikmuhs/ccache-action@v1.2.23
         with:
           key: ccache-linux-${{ matrix.arch }}
 
