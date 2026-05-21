@@ -1,6 +1,4 @@
-﻿#define ZZT_QRCODE_DEBUG
-
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
@@ -8,11 +6,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 using ZZT.QRCode.Native;
-using Debug = UnityEngine.Debug;
-
-#if ZZT_QRCODE_DEBUG
-using System.Diagnostics;
-#endif
 
 namespace ZZT.QRCode
 {
@@ -75,10 +68,151 @@ namespace ZZT.QRCode
 
         private static readonly SemaphoreSlim GlobalSemaphore = new(Math.Max(1, Environment.ProcessorCount - 1));
 
-#if ZZT_QRCODE_DEBUG
-        private static readonly Stopwatch Stopwatch = Stopwatch.StartNew();
-        private static double Now => (double)Stopwatch.ElapsedTicks / Stopwatch.Frequency;
-#endif
+        // ─── Log callback public API ──────────────────────────────────────────
+        //
+        // The native library emits log messages through a single, process-wide C
+        // callback.  We root the P/Invoke delegate inside Bridge and expose a
+        // standard C# event here.  By default no handler is registered and the
+        // library is silent — exactly zero per-frame overhead.
+        //
+        // IMPORTANT: callbacks may arrive from any native thread. Do not call
+        // Unity main-thread APIs directly inside a handler without thread dispatching.
+
+        /// <summary>
+        /// Log severity levels matching <c>zzt_qrcode_log_level_t</c> in the C API.
+        /// </summary>
+        public enum LogLevel
+        {
+            /// <summary>Fine-grained diagnostic events.</summary>
+            Verbose = 0,
+            /// <summary>Debug-level messages.</summary>
+            Debug = 1,
+            /// <summary>Normal informational messages.</summary>
+            Info = 2,
+            /// <summary>Warning conditions.</summary>
+            Warn = 3,
+            /// <summary>Error conditions.</summary>
+            Error = 4,
+        }
+
+        /// <summary>
+        /// Represents the method that will handle the <see cref="OnLogMessage"/> event.
+        /// </summary>
+        /// <param name="level">Log severity level.</param>
+        /// <param name="message">The log message text.</param>
+        public delegate void LogMessageHandler(LogLevel level, string message);
+
+        private static readonly object LogMessageLock = new();
+        private static LogMessageHandler _logMessageHandlers;
+        private static bool _bridgeLogSubscribed;
+
+        /// <summary>
+        /// Occurs when the native QR code library emits a log message.
+        /// <para>
+        /// Subscribe with <c>+=</c> and unsubscribe with <c>-=</c>.  Native logging
+        /// is completely silent until at least one handler is attached.
+        /// </para>
+        /// <para>
+        /// <b>Thread safety:</b> This event may be raised from any native thread.
+        /// Do not rely on Unity main-thread APIs inside a handler without proper
+        /// dispatching (e.g. <c>UnityMainThreadDispatcher</c>).  Exceptions thrown
+        /// by handlers are silently caught to prevent affecting QR detection.
+        /// </para>
+        /// </summary>
+        public static event LogMessageHandler OnLogMessage
+        {
+            add
+            {
+                if (value == null) return;
+                lock (LogMessageLock)
+                {
+                    _logMessageHandlers += value;
+                    if (!_bridgeLogSubscribed)
+                    {
+                        Bridge.LogMessageReceived += OnBridgeLogMessage;
+                        Bridge.EnsureLogCallbackInstalled();
+                        _bridgeLogSubscribed = true;
+                    }
+                }
+            }
+            remove
+            {
+                if (value == null) return;
+                lock (LogMessageLock)
+                {
+                    _logMessageHandlers -= value;
+                    if (_logMessageHandlers == null && _bridgeLogSubscribed)
+                    {
+                        Bridge.LogMessageReceived -= OnBridgeLogMessage;
+                        Bridge.ClearLogCallback();
+                        _bridgeLogSubscribed = false;
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Bridge between <see cref="Bridge.LogMessageReceived"/> (raw int level)
+        /// and the typed public event.
+        /// </summary>
+        private static void OnBridgeLogMessage(int level, string message)
+        {
+            LogMessageHandler handlers;
+            lock (LogMessageLock)
+            {
+                handlers = _logMessageHandlers;
+            }
+
+            if (handlers == null) return;
+
+            foreach (LogMessageHandler handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    handler((LogLevel)level, message);
+                }
+                catch
+                {
+                    // Swallow — logging must never affect QR behaviour.
+                }
+            }
+        }
+
+        /// <summary>
+        /// Clears the native callback on domain reload / application shutdown so
+        /// stale native pointers are never invoked after managed code is torn down.
+        /// </summary>
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void OnSubsystemRegistration()
+        {
+            ClearLogCallbackState();
+        }
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterAssembliesLoaded)]
+        private static void RegisterApplicationQuitCallback()
+        {
+            Application.quitting -= OnApplicationQuitting;
+            Application.quitting += OnApplicationQuitting;
+        }
+
+        private static void OnApplicationQuitting()
+        {
+            ClearLogCallbackState();
+        }
+
+        private static void ClearLogCallbackState()
+        {
+            lock (LogMessageLock)
+            {
+                if (_bridgeLogSubscribed)
+                {
+                    Bridge.LogMessageReceived -= OnBridgeLogMessage;
+                    _bridgeLogSubscribed = false;
+                }
+                _logMessageHandlers = null;
+            }
+            Bridge.ClearLogCallback();
+        }
 
         /// <summary>
         /// Creates a new QrcodeDetector instance.
@@ -109,14 +243,7 @@ namespace ZZT.QRCode
         /// <returns>The detection results.</returns>
         public QrcodeResults DetectAndDecodeSync(string path)
         {
-#if ZZT_QRCODE_DEBUG
-            Debug.Log($"DetectAndDecode path detect {Now} path={path}");
-#endif
-
             int err = Bridge.DetectAndDecode(_detector, path, out Bridge.NativeResult resultPtr);
-#if ZZT_QRCODE_DEBUG
-            Debug.Log($"DetectAndDecode path detect done {Now}");
-#endif
 
             QrcodeResults ret = QrcodeResults.Parse(resultPtr, err);
             Bridge.ReleaseResult(resultPtr);
@@ -153,15 +280,8 @@ namespace ZZT.QRCode
             {
                 return QrcodeResults.FromErrorCode(QrcodeResults.ErrorCode.ErrorInvalidArgument);
             }
-#if ZZT_QRCODE_DEBUG
-            Debug.Log($"DetectAndDecode data detect {Now}");
-#endif
 
             int err = Bridge.DetectAndDecode(_detector, in data[0], data.Length, out Bridge.NativeResult resultPtr);
-
-#if ZZT_QRCODE_DEBUG
-            Debug.Log($"DetectAndDecode data detect done {Now}");
-#endif
 
             QrcodeResults ret = QrcodeResults.Parse(resultPtr, err);
             Bridge.ReleaseResult(resultPtr);
@@ -196,17 +316,11 @@ namespace ZZT.QRCode
             }
 
             int rowBytes = width * GetBpp(format);
-            if (stride > 0 && stride < rowBytes)
-            {
-                Debug.LogWarning($"Stride {stride} may be too small, expected at least {rowBytes}");
-            }
-
             int exactStride = stride <= 0 ? rowBytes : stride;
             int pixelBytes = pixels.Length;
             int expectedPixelBytes = exactStride * (height - 1) + rowBytes;
             if (pixelBytes < expectedPixelBytes)
             {
-                Debug.LogError($"Invalid pixel data size: {pixelBytes}, expected: {expectedPixelBytes}");
                 return QrcodeResults.FromErrorCode(QrcodeResults.ErrorCode.ErrorInvalidArgument);
             }
 
@@ -236,16 +350,8 @@ namespace ZZT.QRCode
                 }
             }
 
-#if ZZT_QRCODE_DEBUG
-            Debug.Log($"DetectAndDecode pixel detect {Now}");
-#endif
-
             int err = Bridge.DetectAndDecode(_detector, MemoryMarshal.GetReference(pixels),
                 (int)format, width, height, stride, out Bridge.NativeResult resultPtr);
-
-#if ZZT_QRCODE_DEBUG
-            Debug.Log($"DetectAndDecode pixel detect done {Now}");
-#endif
 
             QrcodeResults ret = QrcodeResults.Parse(resultPtr, err);
             Bridge.ReleaseResult(resultPtr);
@@ -307,42 +413,25 @@ namespace ZZT.QRCode
 
             if (!texture)
             {
-                Debug.LogError("Texture is null");
                 return false;
             }
 
             if (!texture.isReadable)
             {
-                Debug.LogError("Texture is not readable");
                 return false;
             }
-
-#if ZZT_QRCODE_DEBUG
-            Debug.Log(
-                $"DetectAndDecode texture read {Now} format={texture.format} width={texture.width} height={texture.height}");
-#endif
 
             width = texture.width;
             height = texture.height;
             if (FormatMap.TryGetValue(texture.format, out format))
             {
                 raw = texture.GetRawTextureData();
-
-#if ZZT_QRCODE_DEBUG
-                Debug.Log($"DetectAndDecode texture read raw done {Now}");
-#endif
-
                 return true;
             }
             else
             {
                 colors = texture.GetPixels32();
                 format = PixelFormat.RGBA;
-
-#if ZZT_QRCODE_DEBUG
-                Debug.Log($"DetectAndDecode texture read pixels done {Now}");
-#endif
-
                 return true;
             }
         }

@@ -1,7 +1,5 @@
 package xyz.zhuzeitou.qrcode;
 
-import android.util.Log;
-
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -125,7 +123,6 @@ public class QrcodeResults {
                 return fromError(QrcodeErrorCode.fromValue(error));
             }
 
-            Log.i("zzt", "detectQRCode result size=" + size);
             QrcodeResult[] results = new QrcodeResult[size];
             for (int i = 0; i < size; ++i) {
                 String text = NativeLib.getResultText(result, i);
@@ -162,8 +159,7 @@ public class QrcodeResults {
             }
 
             return fromResults(results);
-        } catch (Exception e) {
-            e.printStackTrace();
+        } catch (Exception ignored) {
             return fromError(QrcodeErrorCode.ERROR_UNKNOWN);
         }
     }

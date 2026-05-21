@@ -1,7 +1,6 @@
 package xyz.zhuzeitou.qrcode
 
 import android.graphics.Bitmap
-import android.util.Log
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
@@ -81,7 +80,6 @@ class QrcodeDetector : AutoCloseable {
      * @return The detection results.
      */
     fun detectQRCodeSync(path: String?): QrcodeResults {
-        Log.i("zzt", "detectQRCode path")
         if (path == null) {
             return QrcodeResults.fromError(QrcodeResults.QrcodeErrorCode.ERROR_INVALID_ARGUMENT)
         }
@@ -92,8 +90,8 @@ class QrcodeDetector : AutoCloseable {
         try {
             result = NativeLib.detectAndDecodePath(nativeDetector, path)
             error = NativeLib.getLastError()
-        } catch (e: Exception) {
-            e.printStackTrace()
+        } catch (_: Exception) {
+            // Silently ignored — result/error remain at defaults.
         }
 
         val qrCodeResults = QrcodeResults.parseResult(result, error)
@@ -138,7 +136,6 @@ class QrcodeDetector : AutoCloseable {
      * @return The detection results.
      */
     fun detectQRCodeSync(image: ByteArray?): QrcodeResults {
-        Log.i("zzt", "detectQRCode data")
         if (image == null) {
             return QrcodeResults.fromError(QrcodeResults.QrcodeErrorCode.ERROR_INVALID_ARGUMENT)
         }
@@ -149,8 +146,8 @@ class QrcodeDetector : AutoCloseable {
         try {
             result = NativeLib.detectAndDecodeData(nativeDetector, image)
             error = NativeLib.getLastError()
-        } catch (e: Exception) {
-            e.printStackTrace()
+        } catch (_: Exception) {
+            // Silently ignored — result/error remain at defaults.
         }
 
         val qrCodeResults = QrcodeResults.parseResult(result, error)
@@ -196,7 +193,6 @@ class QrcodeDetector : AutoCloseable {
      * @return The detection results.
      */
     fun detectQRCodeSync(image: Bitmap?): QrcodeResults {
-        Log.i("zzt", "detectQRCode bitmap")
         if (image == null) {
             return QrcodeResults.fromError(QrcodeResults.QrcodeErrorCode.ERROR_INVALID_ARGUMENT)
         }
@@ -206,12 +202,10 @@ class QrcodeDetector : AutoCloseable {
         try {
             when (val config = image.getConfig()) {
                 Bitmap.Config.ALPHA_8, Bitmap.Config.ARGB_8888 -> {
-                    Log.i("zzt", "detectQRCode bitmap read raw")
                     val pixels = ByteArray(image.getByteCount())
                     image.copyPixelsToBuffer(ByteBuffer.wrap(pixels))
                     val format =
                         if (config == Bitmap.Config.ALPHA_8) PixelFormat.GRAY else PixelFormat.RGBA
-                    Log.i("zzt", "detectQRCode bitmap read done")
                     result = NativeLib.detectAndDecodePixels(
                         nativeDetector,
                         pixels,
@@ -221,17 +215,14 @@ class QrcodeDetector : AutoCloseable {
                         0
                     )
                     error = NativeLib.getLastError()
-                    Log.i("zzt", "detectQRCode bitmap detect done")
                 }
 
                 else -> {
-                    Log.i("zzt", "detectQRCode bitmap read colors")
                     val pixels = IntArray(image.getWidth() * image.getHeight())
                     image.getPixels(
                         pixels, 0, image.getWidth(), 0, 0, image.getWidth(), image.getHeight()
                     )
                     val format = PixelFormat.BGRA
-                    Log.i("zzt", "detectQRCode bitmap read done")
                     result = NativeLib.detectAndDecodePixels(
                         nativeDetector,
                         pixels,
@@ -241,12 +232,11 @@ class QrcodeDetector : AutoCloseable {
                         0
                     )
                     error = NativeLib.getLastError()
-                    Log.i("zzt", "detectQRCode bitmap detect done")
                 }
 
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
+        } catch (_: Exception) {
+            // Silently ignored — result/error remain at defaults.
         }
 
         val qrCodeResults = QrcodeResults.parseResult(result, error)
@@ -296,7 +286,6 @@ class QrcodeDetector : AutoCloseable {
     fun detectQRCodeSync(
         pixels: ByteArray?, format: PixelFormat, width: Int, height: Int
     ): QrcodeResults {
-        Log.i("zzt", "detectQRCode pixels")
         if (pixels == null) {
             return QrcodeResults.fromError(QrcodeResults.QrcodeErrorCode.ERROR_INVALID_ARGUMENT)
         }
@@ -308,8 +297,8 @@ class QrcodeDetector : AutoCloseable {
                 nativeDetector, pixels, format.ordinal, width, height, 0
             )
             error = NativeLib.getLastError()
-        } catch (e: Exception) {
-            e.printStackTrace()
+        } catch (_: Exception) {
+            // Silently ignored — result/error remain at defaults.
         }
 
         val qrCodeResults = QrcodeResults.parseResult(result, error)

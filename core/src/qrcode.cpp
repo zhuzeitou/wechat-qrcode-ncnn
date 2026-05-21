@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include <exception>
@@ -16,25 +16,38 @@
 #include "qrcode_result.h"
 #include "simpleocv.h"
 
-#ifdef __ANDROID__
-#include <android/log.h>
-#endif
+namespace {
+
+std::mutex g_log_callback_mutex;
+zzt_qrcode_log_callback_t g_log_callback = nullptr;
+
+void dispatch_log(zzt_qrcode_log_level_t level, const std::string& message) {
+    zzt_qrcode_log_callback_t callback = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_log_callback_mutex);
+        callback = g_log_callback;
+    }
+
+    if (callback == nullptr) {
+        return;
+    }
+
+    try {
+        callback(level, message.c_str());
+    } catch (...) {
+        // Logging must never change C API behavior.
+    }
+}
 
 static void log_exception(const char* fn, const std::exception& e) {
-#ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_ERROR, "zzt_qrcode", "Exception in %s: %s", fn, e.what());
-#else
-    std::cerr << "Exception in " << fn << ": " << e.what() << std::endl;
-#endif
+    dispatch_log(ZZT_QRCODE_LOG_LEVEL_ERROR, std::string("Exception in ") + fn + ": " + e.what());
 }
 
 static void log_unknown(const char* fn) {
-#ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_ERROR, "zzt_qrcode", "Unknown exception in %s", fn);
-#else
-    std::cerr << "Unknown exception in " << fn << std::endl;
-#endif
+    dispatch_log(ZZT_QRCODE_LOG_LEVEL_ERROR, std::string("Unknown exception in ") + fn);
 }
+
+}  // namespace
 
 template <typename F>
 static zzt_qrcode_error_t catch_exceptions(const char* fn, F&& body) {
@@ -56,29 +69,31 @@ struct WeChatQRCode : cv::wechat_qrcode::WeChatQRCode, zzt::qrcode::Handle<WeCha
 struct QrcodeResultList : std::vector<std::shared_ptr<zzt::qrcode::QrcodeResult>>,
                           zzt::qrcode::Handle<QrcodeResultList, zzt_qrcode_result_h> {};
 
+zzt_qrcode_error_t zzt_qrcode_set_log_callback(zzt_qrcode_log_callback_t callback) {
+    try {
+        std::lock_guard<std::mutex> lock(g_log_callback_mutex);
+        g_log_callback = callback;
+        return ZZT_QRCODE_OK;
+    } catch (const std::exception& e) {
+        log_exception("zzt_qrcode_set_log_callback", e);
+        return ZZT_QRCODE_ERROR_INTERNAL;
+    } catch (...) {
+        log_unknown("zzt_qrcode_set_log_callback");
+        return ZZT_QRCODE_ERROR_INTERNAL;
+    }
+}
+
 zzt_qrcode_detector_h zzt_qrcode_create_detector() {
     try {
         return WeChatQRCode::create_handle();
     } catch (const std::bad_alloc &e) {
-#ifdef __ANDROID__
-        __android_log_print(ANDROID_LOG_ERROR, "zzt_qrcode", "Exception in zzt_qrcode_create_detector: %s", e.what());
-#else
-        std::cerr << "Exception in zzt_qrcode_create_detector: " << e.what() << std::endl;
-#endif
+        log_exception("zzt_qrcode_create_detector", e);
         return nullptr;
     } catch (const std::exception &e) {
-#ifdef __ANDROID__
-        __android_log_print(ANDROID_LOG_ERROR, "zzt_qrcode", "Exception in zzt_qrcode_create_detector: %s", e.what());
-#else
-        std::cerr << "Exception in zzt_qrcode_create_detector: " << e.what() << std::endl;
-#endif
+        log_exception("zzt_qrcode_create_detector", e);
         return nullptr;
     } catch (...) {
-#ifdef __ANDROID__
-        __android_log_print(ANDROID_LOG_ERROR, "zzt_qrcode", "Unknown exception in zzt_qrcode_create_detector");
-#else
-        std::cerr << "Unknown exception in zzt_qrcode_create_detector" << std::endl;
-#endif
+        log_unknown("zzt_qrcode_create_detector");
         return nullptr;
     }
 }
@@ -109,15 +124,7 @@ static zzt_qrcode_error_t qrcode_detect_and_decode_internal(zzt_qrcode_detector_
     }
 
     std::vector<cv::Mat> points;
-    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
     auto results = detector_ptr->detectAndDecode(img, points);
-    std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-    std::chrono::duration<double> elapsed_seconds = end - start;
-#ifdef __ANDROID__
-    __android_log_print(ANDROID_LOG_WARN, "zzt_jni", "detectAndDecode %f seconds", elapsed_seconds.count());
-#else
-    std::cout << "detectAndDecode " << elapsed_seconds.count() << " seconds" << std::endl;
-#endif
     size_t result_len = results.size();
     QrcodeResultList result_vector;
     if (result_len > 0) {

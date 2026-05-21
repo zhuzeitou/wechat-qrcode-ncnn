@@ -1,7 +1,6 @@
 package xyz.zhuzeitou.qrcode;
 
 import android.graphics.Bitmap;
-import android.util.Log;
 
 import java.nio.ByteBuffer;
 import java.util.concurrent.ExecutorService;
@@ -94,7 +93,6 @@ public class QrcodeDetector implements AutoCloseable {
      * @return The detection results.
      */
     public QrcodeResults detectQRCodeSync(String path) {
-        Log.i("zzt", "detectQRCode path");
         if (path == null) {
             return QrcodeResults.fromError(QrcodeResults.QrcodeErrorCode.ERROR_INVALID_ARGUMENT);
         }
@@ -105,8 +103,7 @@ public class QrcodeDetector implements AutoCloseable {
         try {
             result = NativeLib.detectAndDecodePath(nativeDetector, path);
             error = NativeLib.getLastError();
-        } catch (Exception e) {
-            e.printStackTrace();
+        } catch (Exception ignored) {
         }
 
         QrcodeResults qrCodeResults = QrcodeResults.parseResult(result, error);
@@ -136,7 +133,6 @@ public class QrcodeDetector implements AutoCloseable {
      * @return The detection results.
      */
     public QrcodeResults detectQRCodeSync(byte[] image) {
-        Log.i("zzt", "detectQRCode data");
         if (image == null) {
             return QrcodeResults.fromError(QrcodeResults.QrcodeErrorCode.ERROR_INVALID_ARGUMENT);
         }
@@ -147,8 +143,7 @@ public class QrcodeDetector implements AutoCloseable {
         try {
             result = NativeLib.detectAndDecodeData(nativeDetector, image);
             error = NativeLib.getLastError();
-        } catch (Exception e) {
-            e.printStackTrace();
+        } catch (Exception ignored) {
         }
 
         QrcodeResults qrCodeResults = QrcodeResults.parseResult(result, error);
@@ -178,7 +173,6 @@ public class QrcodeDetector implements AutoCloseable {
      * @return The detection results.
      */
     public QrcodeResults detectQRCodeSync(Bitmap image) {
-        Log.i("zzt", "detectQRCode bitmap");
         if (image == null) {
             return QrcodeResults.fromError(QrcodeResults.QrcodeErrorCode.ERROR_INVALID_ARGUMENT);
         }
@@ -190,29 +184,22 @@ public class QrcodeDetector implements AutoCloseable {
             switch (config) {
                 case ALPHA_8:
                 case ARGB_8888: {
-                    Log.i("zzt", "detectQRCode bitmap read raw");
                     byte[] pixels = new byte[image.getByteCount()];
                     image.copyPixelsToBuffer(ByteBuffer.wrap(pixels));
                     PixelFormat format = config == Bitmap.Config.ALPHA_8 ? PixelFormat.GRAY : PixelFormat.RGBA;
-                    Log.i("zzt", "detectQRCode bitmap read done");
                     result = NativeLib.detectAndDecodePixels(nativeDetector, pixels, format.ordinal(), image.getWidth(), image.getHeight(), 0);
                     error = NativeLib.getLastError();
-                    Log.i("zzt", "detectQRCode bitmap detect done");
                     break;
                 }
                 default: {
-                    Log.i("zzt", "detectQRCode bitmap read colors");
                     int[] pixels = new int[image.getWidth() * image.getHeight()];
                     image.getPixels(pixels, 0, image.getWidth(), 0, 0, image.getWidth(), image.getHeight());
                     PixelFormat format = PixelFormat.BGRA;
-                    Log.i("zzt", "detectQRCode bitmap read done");
                     result = NativeLib.detectAndDecodePixels(nativeDetector, pixels, format.ordinal(), image.getWidth(), image.getHeight(), 0);
                     error = NativeLib.getLastError();
-                    Log.i("zzt", "detectQRCode bitmap detect done");
                 }
             }
-        } catch (Exception e) {
-            e.printStackTrace();
+        } catch (Exception ignored) {
         }
 
         QrcodeResults qrCodeResults = QrcodeResults.parseResult(result, error);
@@ -245,7 +232,6 @@ public class QrcodeDetector implements AutoCloseable {
      * @return The detection results.
      */
     public QrcodeResults detectQRCodeSync(byte[] pixels, PixelFormat format, int width, int height) {
-        Log.i("zzt", "detectQRCode pixels");
         if (pixels == null) {
             return QrcodeResults.fromError(QrcodeResults.QrcodeErrorCode.ERROR_INVALID_ARGUMENT);
         }
@@ -255,8 +241,7 @@ public class QrcodeDetector implements AutoCloseable {
         try {
             result = NativeLib.detectAndDecodePixels(nativeDetector, pixels, format.ordinal(), width, height, 0);
             error = NativeLib.getLastError();
-        } catch (Exception e) {
-            e.printStackTrace();
+        } catch (Exception ignored) {
         }
 
         QrcodeResults qrCodeResults = QrcodeResults.parseResult(result, error);

@@ -66,6 +66,39 @@ typedef enum {
 } zzt_qrcode_error_t;
 
 /**
+ * Log level enum for messages emitted by the C API layer.
+ */
+typedef enum {
+    ZZT_QRCODE_LOG_LEVEL_VERBOSE = 0,
+    ZZT_QRCODE_LOG_LEVEL_DEBUG = 1,
+    ZZT_QRCODE_LOG_LEVEL_INFO = 2,
+    ZZT_QRCODE_LOG_LEVEL_WARN = 3,
+    ZZT_QRCODE_LOG_LEVEL_ERROR = 4,
+} zzt_qrcode_log_level_t;
+
+/**
+ * Log callback for C API messages.
+ *
+ * @param level Log level.
+ * @param message UTF-8 null-terminated message string. Valid only during this callback invocation.
+ *
+ * The callback may be invoked from arbitrary native threads. It should not throw, block for a long time, or retain
+ * the message pointer after returning.
+ */
+typedef void (*zzt_qrcode_log_callback_t)(zzt_qrcode_log_level_t level, const char *message);
+
+/**
+ * Set the process-wide C API log callback.
+ *
+ * By default no callback is installed and the C API is silent. Passing NULL clears the callback. Clearing the callback
+ * prevents future dispatch but does not cancel callbacks already in progress.
+ *
+ * @param callback Callback function, or NULL to clear.
+ * @return ZZT_QRCODE_OK Success
+ */
+ZZT_QRCODE_API zzt_qrcode_error_t zzt_qrcode_set_log_callback(zzt_qrcode_log_callback_t callback);
+
+/**
  * Create a QR code detector instance.
  * @return Returns the detector handle, or NULL if failed.
  */

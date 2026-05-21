@@ -1,4 +1,5 @@
-﻿#include <chrono>
+﻿#include <atomic>
+#include <chrono>
 #include <codecvt>
 #include <cstdlib>
 #include <cstring>
@@ -12,9 +13,48 @@
 
 #include "zzt_qrcode/qrcode.h"
 
+namespace {
+
+std::atomic<int> g_log_callback_count{0};
+std::atomic<int> g_log_callback_invalid_message{0};
+
+const char *log_level_name(zzt_qrcode_log_level_t level) {
+    switch (level) {
+        case ZZT_QRCODE_LOG_LEVEL_VERBOSE:
+            return "VERBOSE";
+        case ZZT_QRCODE_LOG_LEVEL_DEBUG:
+            return "DEBUG";
+        case ZZT_QRCODE_LOG_LEVEL_INFO:
+            return "INFO";
+        case ZZT_QRCODE_LOG_LEVEL_WARN:
+            return "WARN";
+        case ZZT_QRCODE_LOG_LEVEL_ERROR:
+            return "ERROR";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+void on_qrcode_log(zzt_qrcode_log_level_t level, const char *message) {
+    g_log_callback_count.fetch_add(1, std::memory_order_relaxed);
+    if (message == nullptr) {
+        g_log_callback_invalid_message.fetch_add(1, std::memory_order_relaxed);
+        message = "";
+    }
+    std::cerr << "[zzt_qrcode][" << log_level_name(level) << "] " << message << std::endl;
+}
+
+}  // namespace
+
 int main(int argc, char *argv[]) {
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0] << " <image_path> [image_path...]" << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    zzt_qrcode_error_t ret_log = zzt_qrcode_set_log_callback(on_qrcode_log);
+    if (ret_log != ZZT_QRCODE_OK) {
+        std::cerr << "set log callback failed with error: " << ret_log << std::endl;
         return EXIT_FAILURE;
     }
 
@@ -96,6 +136,19 @@ int main(int argc, char *argv[]) {
     zzt_qrcode_error_t ret_release_detector = zzt_qrcode_release_detector(detector);
     if (ret_release_detector != ZZT_QRCODE_OK) {
         std::cerr << "release detector failed with error: " << ret_release_detector << std::endl;
+    }
+
+    if (g_log_callback_invalid_message.load(std::memory_order_relaxed) != 0) {
+        std::cerr << "log callback validation failed: received null message" << std::endl;
+        zzt_qrcode_set_log_callback(nullptr);
+        return EXIT_FAILURE;
+    }
+    std::cout << "log callback count: " << g_log_callback_count.load(std::memory_order_relaxed) << std::endl;
+
+    ret_log = zzt_qrcode_set_log_callback(nullptr);
+    if (ret_log != ZZT_QRCODE_OK) {
+        std::cerr << "clear log callback failed with error: " << ret_log << std::endl;
+        return EXIT_FAILURE;
     }
     return 0;
 }

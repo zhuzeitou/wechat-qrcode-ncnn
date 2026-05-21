@@ -1,7 +1,5 @@
 package xyz.zhuzeitou.qrcode
 
-import android.util.Log
-
 /**
  * QR Code detection results.
  *
@@ -119,8 +117,7 @@ class QrcodeResults private constructor(
                 }
 
                 return fromResult(results)
-            } catch (e: Exception) {
-                e.printStackTrace()
+            } catch (_: Exception) {
                 return fromError(QrcodeErrorCode.ERROR_UNKNOWN)
             }
         }

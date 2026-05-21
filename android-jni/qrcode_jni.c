@@ -7,6 +7,14 @@
 
 static thread_local zzt_qrcode_error_t last_error = ZZT_QRCODE_OK;
 
+/* Log dispatch bridge state */
+static mtx_t g_log_mutex;
+static int g_log_mutex_initialized = 0;
+static JavaVM *g_jvm = NULL;
+static jclass g_log_class = NULL;
+static jmethodID g_log_method = NULL;
+static const jchar empty_jchar[] = {0};
+
 /**
  * Convert standard UTF-8 to UTF-16 (BMP + Surrogate Pairs)
  * Insert 0xFFFD character when handling invalid sequences, and resync as much as possible.
@@ -339,6 +347,92 @@ zzt_qrcode_get_result_points_jni(JNIEnv *env, jclass clazz, jlong native_result,
     return points_array;
 }
 
+/**
+ * Native callback registered with zzt_qrcode_set_log_callback.
+ * Dispatches to the fixed static method NativeLib.dispatchLog(int, String).
+ * Handles thread attachment for arbitrary native threads and clears Java exceptions.
+ */
+static void native_log_callback(zzt_qrcode_log_level_t level, const char *message) {
+    if (!g_log_mutex_initialized) {
+        return;
+    }
+
+    mtx_lock(&g_log_mutex);
+    JavaVM *jvm = g_jvm;
+    mtx_unlock(&g_log_mutex);
+
+    if (jvm == NULL) {
+        return;
+    }
+
+    JNIEnv *env = NULL;
+    jint get_env_err = (*jvm)->GetEnv(jvm, (void **) &env, JNI_VERSION_1_6);
+    jboolean did_attach = JNI_FALSE;
+
+    if (get_env_err == JNI_EDETACHED) {
+        if ((*jvm)->AttachCurrentThread(jvm, &env, NULL) != JNI_OK || env == NULL) {
+            return;
+        }
+        did_attach = JNI_TRUE;
+    } else if (get_env_err != JNI_OK || env == NULL) {
+        return;
+    }
+
+    mtx_lock(&g_log_mutex);
+    jclass log_class = g_log_class == NULL ? NULL : (jclass) (*env)->NewLocalRef(env, g_log_class);
+    jmethodID log_method = g_log_method;
+    mtx_unlock(&g_log_mutex);
+
+    if (log_class == NULL || log_method == NULL) {
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+        }
+        if (did_attach) {
+            (*jvm)->DetachCurrentThread(jvm);
+        }
+        return;
+    }
+
+    jstring msg_jstr = NULL;
+    int skip_dispatch = 0;
+
+    /* Convert message: NULL or empty -> empty string */
+    if (message != NULL && message[0] != '\0') {
+        int msg_len = (int) strlen(message);
+        int msg_buf_len = msg_len * 2 + 2;
+        char16_t *msg_u16 = (char16_t *) malloc(sizeof(char16_t) * msg_buf_len);
+        if (msg_u16 != NULL) {
+            int msg_u16_len = utf8_to_utf16((const char8_t *) message, msg_len, msg_u16, msg_buf_len);
+            msg_jstr = (msg_u16_len > 0)
+                       ? (*env)->NewString(env, (const jchar *) msg_u16, msg_u16_len)
+                       : (*env)->NewString(env, empty_jchar, 0);
+            free(msg_u16);
+        } else {
+            skip_dispatch = 1;
+        }
+    } else {
+        msg_jstr = (*env)->NewString(env, empty_jchar, 0);
+    }
+
+    if (!skip_dispatch && msg_jstr != NULL) {
+        (*env)->CallStaticVoidMethod(env, log_class, log_method, (jint) level, msg_jstr);
+    }
+
+    /* Clear any Java exception thrown by string creation or dispatch; logging must never affect QR behavior. */
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+    }
+
+    if (msg_jstr != NULL) {
+        (*env)->DeleteLocalRef(env, msg_jstr);
+    }
+    (*env)->DeleteLocalRef(env, log_class);
+
+    if (did_attach) {
+        (*jvm)->DetachCurrentThread(jvm);
+    }
+}
+
 jint JNI_OnLoad(JavaVM *vm, void *reserved) {
     JNIEnv *env = NULL;
     jint ret = (*vm)->GetEnv(vm, (void **) &env, JNI_VERSION_1_6);
@@ -347,6 +441,39 @@ jint JNI_OnLoad(JavaVM *vm, void *reserved) {
     }
     jclass cls = (*env)->FindClass(env, "xyz/zhuzeitou/qrcode/NativeLib");
     if (cls == NULL) {
+        return JNI_ERR;
+    }
+
+    if (!g_log_mutex_initialized && mtx_init(&g_log_mutex, mtx_plain) != thrd_success) {
+        (*env)->DeleteLocalRef(env, cls);
+        return JNI_ERR;
+    }
+    g_log_mutex_initialized = 1;
+
+    /* Cache JVM, global class reference, and method ID for log dispatch */
+    mtx_lock(&g_log_mutex);
+    g_jvm = vm;
+    g_log_class = (jclass) (*env)->NewGlobalRef(env, cls);
+    if (g_log_class != NULL) {
+        g_log_method = (*env)->GetStaticMethodID(env, g_log_class,
+                                                  "dispatchLog",
+                                                  "(ILjava/lang/String;)V");
+    }
+    mtx_unlock(&g_log_mutex);
+
+    if (g_log_class == NULL || g_log_method == NULL) {
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+        }
+        if (g_log_class != NULL) {
+            (*env)->DeleteGlobalRef(env, g_log_class);
+        }
+        g_jvm = NULL;
+        g_log_class = NULL;
+        g_log_method = NULL;
+        (*env)->DeleteLocalRef(env, cls);
+        mtx_destroy(&g_log_mutex);
+        g_log_mutex_initialized = 0;
         return JNI_ERR;
     }
     JNINativeMethod methods[] = {
@@ -365,11 +492,59 @@ jint JNI_OnLoad(JavaVM *vm, void *reserved) {
     ret = (*env)->RegisterNatives(env, cls, methods, sizeof(methods) / sizeof(methods[0]));
     (*env)->DeleteLocalRef(env, cls);
     if (ret != JNI_OK) {
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+        }
+        if (g_log_class != NULL) {
+            (*env)->DeleteGlobalRef(env, g_log_class);
+        }
+        g_jvm = NULL;
+        g_log_class = NULL;
+        g_log_method = NULL;
+        mtx_destroy(&g_log_mutex);
+        g_log_mutex_initialized = 0;
+        return JNI_ERR;
+    }
+
+    zzt_qrcode_error_t log_callback_error = zzt_qrcode_set_log_callback(native_log_callback);
+    if (log_callback_error != ZZT_QRCODE_OK) {
+        if (g_log_class != NULL) {
+            (*env)->DeleteGlobalRef(env, g_log_class);
+        }
+        g_jvm = NULL;
+        g_log_class = NULL;
+        g_log_method = NULL;
+        mtx_destroy(&g_log_mutex);
+        g_log_mutex_initialized = 0;
         return JNI_ERR;
     }
     return JNI_VERSION_1_6;
 }
 
 void JNI_OnUnload(JavaVM *vm, void *reserved) {
+    /* Clear the C log callback so no further dispatches arrive during teardown */
+    zzt_qrcode_set_log_callback(NULL);
 
+    if (!g_log_mutex_initialized) {
+        return;
+    }
+
+    JNIEnv *env = NULL;
+    jclass log_class = NULL;
+    mtx_lock(&g_log_mutex);
+    if ((*vm)->GetEnv(vm, (void **) &env, JNI_VERSION_1_6) == JNI_OK && env != NULL) {
+        log_class = g_log_class;
+    }
+    g_jvm = NULL;
+    g_log_class = NULL;
+    g_log_method = NULL;
+    mtx_unlock(&g_log_mutex);
+
+    /* Release the global class reference after it is no longer reachable from callbacks. */
+    if (env != NULL && log_class != NULL) {
+        (*env)->DeleteGlobalRef(env, log_class);
+    }
+
+    /* Do not destroy g_log_mutex here: an in-flight callback may still be unwinding after
+     * zzt_qrcode_set_log_callback(NULL). Keeping the mutex initialized avoids a teardown race. */
 }

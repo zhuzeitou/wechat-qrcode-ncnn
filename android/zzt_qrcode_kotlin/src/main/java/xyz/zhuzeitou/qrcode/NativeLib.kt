@@ -1,10 +1,7 @@
 package xyz.zhuzeitou.qrcode
 
-import android.util.Log
-
 internal object NativeLib {
     init {
-        Log.i("NativeLib", "init")
         System.loadLibrary("zzt_qrcode_jni")
     }
 
@@ -44,4 +41,16 @@ internal object NativeLib {
 
     @JvmStatic
     external fun getLastError(): Int
+
+    /**
+     * Bridge method called by JNI ([native_log_callback]) to dispatch native
+     * log messages to the managed [QrcodeLog] listener list.
+     *
+     * This is the **only** JNI-facing entry point for logging. Business callback
+     * objects are never exposed to JNI.
+     */
+    @JvmStatic
+    fun dispatchLog(level: Int, message: String) {
+        QrcodeLog.dispatch(level, message)
+    }
 }

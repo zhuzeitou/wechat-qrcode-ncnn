@@ -341,14 +341,33 @@ zzt_qrcode_release_result(result);
 zzt_qrcode_release_detector(detector);
 ```
 
+Optional native logs are disabled by default. Install a callback only when the host application wants to handle logs:
+
+```c
+static void on_qrcode_log(zzt_qrcode_log_level_t level, const char *message) {
+    // message is UTF-8 and valid only during this call.
+    // Forward to your application's logger here.
+}
+
+zzt_qrcode_set_log_callback(on_qrcode_log);
+// ... use the library ...
+zzt_qrcode_set_log_callback(NULL); // clear callback, return to silent mode
+```
+
 ### Android
 
 **Kotlin** (Recommended — with Coroutine support)
 
 ```kotlin
 import xyz.zhuzeitou.qrcode.QrcodeDetector
+import xyz.zhuzeitou.qrcode.QrcodeLog
 import xyz.zhuzeitou.qrcode.QrcodeResults
 import xyz.zhuzeitou.qrcode.QrcodeResults.QrcodeErrorCode
+
+// Optional: native/wrapper logging is silent until a callback is registered.
+QrcodeLog.add { level, message ->
+    Log.d("QRCode", message)
+}
 
 // Coroutine-based detection with structured concurrency
 lifecycleScope.launch {
@@ -379,7 +398,11 @@ lifecycleScope.launch {
 
 ```java
 import xyz.zhuzeitou.qrcode.QrcodeDetector;
+import xyz.zhuzeitou.qrcode.NativeLib;
 import xyz.zhuzeitou.qrcode.QrcodeResults;
+
+// Optional: native/wrapper logging is silent until a callback is registered.
+NativeLib.addLogCallback((level, message) -> Log.d("QRCode", message));
 
 // Initialize detector (using try-with-resources to automatically close/release)
 try (QrcodeDetector detector = new QrcodeDetector()) {
@@ -412,6 +435,13 @@ try (QrcodeDetector detector = new QrcodeDetector()) {
 
 ```csharp
 using ZZT.QRCode;
+
+// Optional: native/wrapper logging is silent until a handler is attached.
+// Callbacks may arrive off the Unity main thread; dispatch before touching Unity APIs.
+QrcodeDetector.OnLogMessage += (level, message) =>
+{
+    // Forward to your logging system here.
+};
 
 // Initialize detector
 // QrcodeDetector implements IDisposable, so use 'using' statement to ensure resource release
