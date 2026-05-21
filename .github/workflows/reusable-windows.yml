@@ -15,13 +15,16 @@ jobs:
         include:
           - arch: x64
             msvc_arch: x64
+            runner: windows-latest
           - arch: x86
             msvc_arch: amd64_x86
+            runner: windows-latest
           - arch: arm64
             msvc_arch: amd64_arm64
+            runner: windows-2022
 
     name: Windows ${{ matrix.arch }}
-    runs-on: windows-latest
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: Checkout
