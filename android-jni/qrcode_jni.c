@@ -399,7 +399,7 @@ static void native_log_callback(zzt_qrcode_log_level_t level, const char *messag
     /* Convert message: NULL or empty -> empty string */
     if (message != NULL && message[0] != '\0') {
         int msg_len = (int) strlen(message);
-        int msg_buf_len = msg_len * 2 + 2;
+        int msg_buf_len = msg_len + 1;
         char16_t *msg_u16 = (char16_t *) malloc(sizeof(char16_t) * msg_buf_len);
         if (msg_u16 != NULL) {
             int msg_u16_len = utf8_to_utf16((const char8_t *) message, msg_len, msg_u16, msg_buf_len);
