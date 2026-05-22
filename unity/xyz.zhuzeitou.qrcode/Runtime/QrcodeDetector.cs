@@ -71,12 +71,24 @@ namespace ZZT.QRCode
         // ─── Log callback public API ──────────────────────────────────────────
         //
         // The native library emits log messages through a single, process-wide C
-        // callback.  We root the P/Invoke delegate inside Bridge and expose a
-        // standard C# event here.  By default no handler is registered and the
+        // callback.  We root the P/Invoke delegate inside Bridge and expose
+        // standard C# events here.  By default no handler is registered and the
         // library is silent — exactly zero per-frame overhead.
         //
-        // IMPORTANT: callbacks may arrive from any native thread. Do not call
-        // Unity main-thread APIs directly inside a handler without thread dispatching.
+        // Two delivery paths are available:
+        //
+        //   OnLogMessage              — fires on whatever thread the native
+        //                               callback invoked us from (any thread).
+        //                               Suitable for file loggers, telemetry, etc.
+        //
+        //   OnLogMessageMainThread    — guarantees delivery on the Unity main
+        //                               thread via SynchronizationContext.Post,
+        //                               or inline when the log already originates
+        //                               from the main thread.  Suitable for
+        //                               handlers that touch Unity APIs.
+        //
+        // IMPORTANT: callbacks may arrive from any native thread.  Do not call
+        // Unity main-thread APIs directly inside a handler without dispatching.
 
         /// <summary>
         /// Log severity levels matching <c>zzt_qrcode_log_level_t</c> in the C API.
@@ -96,15 +108,53 @@ namespace ZZT.QRCode
         }
 
         /// <summary>
-        /// Represents the method that will handle the <see cref="OnLogMessage"/> event.
+        /// Represents the method that will handle the <see cref="OnLogMessage"/> and
+        /// <see cref="OnLogMessageMainThread"/> events.
         /// </summary>
         /// <param name="level">Log severity level.</param>
         /// <param name="message">The log message text.</param>
         public delegate void LogMessageHandler(LogLevel level, string message);
 
+        // ─── Shared lock and handler storage ────────────────────────────────
+
         private static readonly object LogMessageLock = new();
-        private static LogMessageHandler _logMessageHandlers;
+        private static LogMessageHandler _directHandlers;
+        private static LogMessageHandler _mainThreadHandlers;
         private static bool _bridgeLogSubscribed;
+
+        // ─── Main-thread identity (captured at startup) ─────────────────────
+
+        private static int _mainThreadId;
+        private static SynchronizationContext _mainThreadContext;
+
+        // ─── Epoch guard ────────────────────────────────────────────────────
+        // Incremented on every ClearLogCallbackState().  Main-thread messages
+        // posted via SynchronizationContext capture the current epoch value.
+        // When the callback eventually runs it compares against the live epoch;
+        // a mismatch means the state was reset (domain reload / quit) and the
+        // message is silently discarded.
+        private static int _epoch;
+
+        // ─── Bridge subscription helpers ────────────────────────────────────
+
+        private static void SubscribeBridgeIfNeeded()
+        {
+            if (_bridgeLogSubscribed) return;
+            Bridge.LogMessageReceived += OnBridgeLogMessage;
+            Bridge.EnsureLogCallbackInstalled();
+            _bridgeLogSubscribed = true;
+        }
+
+        private static void UnsubscribeBridgeIfNoHandlers()
+        {
+            if (_directHandlers != null || _mainThreadHandlers != null) return;
+            if (!_bridgeLogSubscribed) return;
+            Bridge.LogMessageReceived -= OnBridgeLogMessage;
+            Bridge.ClearLogCallback();
+            _bridgeLogSubscribed = false;
+        }
+
+        // ─── OnLogMessage (direct, any thread) ──────────────────────────────
 
         /// <summary>
         /// Occurs when the native QR code library emits a log message.
@@ -113,10 +163,11 @@ namespace ZZT.QRCode
         /// is completely silent until at least one handler is attached.
         /// </para>
         /// <para>
-        /// <b>Thread safety:</b> This event may be raised from any native thread.
-        /// Do not rely on Unity main-thread APIs inside a handler without proper
-        /// dispatching (e.g. <c>UnityMainThreadDispatcher</c>).  Exceptions thrown
-        /// by handlers are silently caught to prevent affecting QR detection.
+        /// <b>Thread safety:</b> This event is raised on whatever thread the native
+        /// callback invoked us from (any native thread).  Do not rely on Unity
+        /// main-thread APIs inside a handler without proper dispatching.
+        /// Exceptions thrown by handlers are silently caught to prevent affecting
+        /// QR detection.
         /// </para>
         /// </summary>
         public static event LogMessageHandler OnLogMessage
@@ -126,13 +177,8 @@ namespace ZZT.QRCode
                 if (value == null) return;
                 lock (LogMessageLock)
                 {
-                    _logMessageHandlers += value;
-                    if (!_bridgeLogSubscribed)
-                    {
-                        Bridge.LogMessageReceived += OnBridgeLogMessage;
-                        Bridge.EnsureLogCallbackInstalled();
-                        _bridgeLogSubscribed = true;
-                    }
+                    _directHandlers += value;
+                    SubscribeBridgeIfNeeded();
                 }
             }
             remove
@@ -140,32 +186,126 @@ namespace ZZT.QRCode
                 if (value == null) return;
                 lock (LogMessageLock)
                 {
-                    _logMessageHandlers -= value;
-                    if (_logMessageHandlers == null && _bridgeLogSubscribed)
-                    {
-                        Bridge.LogMessageReceived -= OnBridgeLogMessage;
-                        Bridge.ClearLogCallback();
-                        _bridgeLogSubscribed = false;
-                    }
+                    _directHandlers -= value;
+                    UnsubscribeBridgeIfNoHandlers();
                 }
             }
         }
 
+        // ─── OnLogMessageMainThread (main-thread dispatched) ────────────────
+
+        /// <summary>
+        /// Occurs when the native QR code library emits a log message.
+        /// <para>
+        /// Unlike <see cref="OnLogMessage"/>, this event guarantees that handlers
+        /// are called on the Unity main thread via <c>SynchronizationContext.Post</c>,
+        /// or inline when the log already originates from the main thread.
+        /// </para>
+        /// <para>
+        /// <b>Reentrancy:</b> When the log is produced by code running on the main
+        /// thread (e.g. a <c>DetectAndDecodeSync</c> call that internally triggers
+        /// a log), the handler is invoked synchronously inline.  Avoid long-running
+        /// or blocking work inside handlers to prevent reentrancy surprises.
+        /// </para>
+        /// <para>
+        /// If no <c>SynchronizationContext</c> was captured at startup (very early
+        /// Unity lifecycle), the event is silently discarded when the callback
+        /// arrives from a non-main thread.  Exceptions thrown by handlers are
+        /// silently caught.
+        /// </para>
+        /// </summary>
+        public static event LogMessageHandler OnLogMessageMainThread
+        {
+            add
+            {
+                if (value == null) return;
+                lock (LogMessageLock)
+                {
+                    _mainThreadHandlers += value;
+                    SubscribeBridgeIfNeeded();
+                }
+            }
+            remove
+            {
+                if (value == null) return;
+                lock (LogMessageLock)
+                {
+                    _mainThreadHandlers -= value;
+                    UnsubscribeBridgeIfNoHandlers();
+                }
+            }
+        }
+
+        // ─── OnBridgeLogMessage ─────────────────────────────────────────────
+
         /// <summary>
         /// Bridge between <see cref="Bridge.LogMessageReceived"/> (raw int level)
-        /// and the typed public event.
+        /// and the typed public events.  Called from any native thread.
         /// </summary>
         private static void OnBridgeLogMessage(int level, string message)
         {
-            LogMessageHandler handlers;
+            LogMessageHandler directSnapshot;
+            LogMessageHandler mainSnapshot;
+            int epochAtCapture;
+
             lock (LogMessageLock)
             {
-                handlers = _logMessageHandlers;
+                directSnapshot = _directHandlers;
+                mainSnapshot = _mainThreadHandlers;
+                epochAtCapture = _epoch;
             }
 
-            if (handlers == null) return;
+            // 1. Direct: invoke immediately on the current (any) thread.
+            if (directSnapshot != null)
+            {
+                foreach (LogMessageHandler handler in directSnapshot.GetInvocationList())
+                {
+                    try
+                    {
+                        handler((LogLevel)level, message);
+                    }
+                    catch
+                    {
+                        // Swallow — logging must never affect QR behaviour.
+                    }
+                }
+            }
 
-            foreach (LogMessageHandler handler in handlers.GetInvocationList())
+            // 2. Main-thread: dispatch to Unity main thread or inline.
+            if (mainSnapshot == null) return;
+
+            if (Environment.CurrentManagedThreadId == _mainThreadId)
+            {
+                // Already on captured main thread → inline (may be reentrant).
+                InvokeMainSnapshot(mainSnapshot, level, message);
+            }
+            else
+            {
+                if (_mainThreadContext == null)
+                {
+                    // No SynchronizationContext captured — cannot dispatch from
+                    // a non-main thread. Silently discard to avoid calling
+                    // handlers on the wrong thread.
+                    return;
+                }
+
+                // Off main thread → Post via SynchronizationContext.
+                var capturedMessage = message;
+                var capturedLevel = level;
+                var capturedEpoch = epochAtCapture;
+                var capturedSnapshot = mainSnapshot;
+                _mainThreadContext.Post(_ =>
+                {
+                    // Epoch guard: discard if state was reset between Post and execution
+                    if (_epoch != capturedEpoch) return;
+                    InvokeMainSnapshot(capturedSnapshot, capturedLevel, capturedMessage);
+                }, null);
+            }
+        }
+
+        private static void InvokeMainSnapshot(LogMessageHandler snapshot, int level, string message)
+        {
+            foreach (LogMessageHandler handler in snapshot.GetInvocationList())
             {
                 try
                 {
@@ -178,9 +318,11 @@ namespace ZZT.QRCode
             }
         }
 
+        // ─── Lifecycle / cleanup ────────────────────────────────────────────
+
         /// <summary>
-        /// Clears the native callback on domain reload / application shutdown so
-        /// stale native pointers are never invoked after managed code is torn down.
+        /// Clears the native callback on domain reload so stale native pointers
+        /// are never invoked after managed code is torn down.
         /// </summary>
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
         private static void OnSubsystemRegistration()
@@ -189,8 +331,12 @@ namespace ZZT.QRCode
         }
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterAssembliesLoaded)]
-        private static void RegisterApplicationQuitCallback()
+        private static void AfterAssembliesLoaded()
         {
+            // Capture main-thread identity for later main-thread dispatch.
+            _mainThreadId = Environment.CurrentManagedThreadId;
+            _mainThreadContext = SynchronizationContext.Current;
+
             Application.quitting -= OnApplicationQuitting;
             Application.quitting += OnApplicationQuitting;
         }
@@ -200,6 +346,11 @@ namespace ZZT.QRCode
             ClearLogCallbackState();
         }
 
+        /// <summary>
+        /// Tears down all managed handlers, unsubscribes from Bridge, clears the
+        /// native callback, and increments the epoch so any in-flight main-thread
+        /// Posts are silently discarded.
+        /// </summary>
         private static void ClearLogCallbackState()
         {
             lock (LogMessageLock)
@@ -209,9 +360,12 @@ namespace ZZT.QRCode
                     Bridge.LogMessageReceived -= OnBridgeLogMessage;
                     _bridgeLogSubscribed = false;
                 }
-                _logMessageHandlers = null;
+                _directHandlers = null;
+                _mainThreadHandlers = null;
             }
             Bridge.ClearLogCallback();
+            // Increment AFTER clearing so in-flight Posts see a mismatch.
+            Interlocked.Increment(ref _epoch);
         }
 
         /// <summary>
