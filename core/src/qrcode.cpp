@@ -1,6 +1,7 @@
 #include "zzt_qrcode/qrcode.h"
 
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -22,60 +23,84 @@ std::mutex g_log_callback_mutex;
 zzt_qrcode_log_callback_t g_log_callback = nullptr;
 
 bool has_log_callback() {
-    std::lock_guard<std::mutex> lock(g_log_callback_mutex);
-    return g_log_callback != nullptr;
+    try {
+        std::lock_guard<std::mutex> lock(g_log_callback_mutex);
+        return g_log_callback != nullptr;
+    } catch (...) {
+        return false;
+    }
 }
 
 void dispatch_log(zzt_qrcode_log_level_t level, const std::string& message) {
-    zzt_qrcode_log_callback_t callback = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(g_log_callback_mutex);
-        callback = g_log_callback;
-    }
-
-    if (callback == nullptr) {
-        return;
-    }
-
     try {
+        zzt_qrcode_log_callback_t callback = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(g_log_callback_mutex);
+            callback = g_log_callback;
+        }
+
+        if (callback == nullptr) {
+            return;
+        }
+
         callback(level, message.c_str());
     } catch (...) {
         // Logging must never change C API behavior.
     }
 }
 
+static bool is_path_decode_function(const char* fn) {
+    return std::strcmp(fn, "zzt_qrcode_detect_and_decode_path_u8") == 0 ||
+           std::strcmp(fn, "zzt_qrcode_detect_and_decode_path_u16") == 0;
+}
+
 static void log_exception(const char* fn, const std::exception& e) {
     if (!has_log_callback()) {
         return;
     }
-    if (std::string(fn) == "zzt_qrcode_detect_and_decode_path_u8" ||
-        std::string(fn) == "zzt_qrcode_detect_and_decode_path_u16") {
-        dispatch_log(ZZT_QRCODE_LOG_LEVEL_ERROR, std::string("Exception in ") + fn);
-        return;
+    try {
+        if (is_path_decode_function(fn)) {
+            dispatch_log(ZZT_QRCODE_LOG_LEVEL_ERROR, std::string("Exception in ") + fn);
+            return;
+        }
+        dispatch_log(ZZT_QRCODE_LOG_LEVEL_ERROR, std::string("Exception in ") + fn + ": " + e.what());
+    } catch (...) {
+        // Logging must never change C API behavior.
     }
-    dispatch_log(ZZT_QRCODE_LOG_LEVEL_ERROR, std::string("Exception in ") + fn + ": " + e.what());
 }
 
 static void log_unknown(const char* fn) {
     if (!has_log_callback()) {
         return;
     }
-    dispatch_log(ZZT_QRCODE_LOG_LEVEL_ERROR, std::string("Unknown exception in ") + fn);
+    try {
+        dispatch_log(ZZT_QRCODE_LOG_LEVEL_ERROR, std::string("Unknown exception in ") + fn);
+    } catch (...) {
+        // Logging must never change C API behavior.
+    }
 }
 
 static void log_warn(const char* fn, const char* reason) {
     if (!has_log_callback()) {
         return;
     }
-    dispatch_log(ZZT_QRCODE_LOG_LEVEL_WARN, std::string("Warning in ") + fn + ": " + reason);
+    try {
+        dispatch_log(ZZT_QRCODE_LOG_LEVEL_WARN, std::string("Warning in ") + fn + ": " + reason);
+    } catch (...) {
+        // Logging must never change C API behavior.
+    }
 }
 
 static void log_warn_int(const char* fn, const char* reason, const char* name, int value) {
     if (!has_log_callback()) {
         return;
     }
-    dispatch_log(ZZT_QRCODE_LOG_LEVEL_WARN,
-                 std::string("Warning in ") + fn + ": " + reason + " (" + name + "=" + std::to_string(value) + ")");
+    try {
+        dispatch_log(ZZT_QRCODE_LOG_LEVEL_WARN,
+                     std::string("Warning in ") + fn + ": " + reason + " (" + name + "=" + std::to_string(value) + ")");
+    } catch (...) {
+        // Logging must never change C API behavior.
+    }
 }
 
 static void log_warn_pixels(const char* fn, const char* reason, zzt_qrcode_pixel_format_t format, int width, int height,
@@ -83,10 +108,27 @@ static void log_warn_pixels(const char* fn, const char* reason, zzt_qrcode_pixel
     if (!has_log_callback()) {
         return;
     }
-    dispatch_log(ZZT_QRCODE_LOG_LEVEL_WARN,
-                 std::string("Warning in ") + fn + ": " + reason + " (format=" +
-                         std::to_string(static_cast<int>(format)) + ", width=" + std::to_string(width) +
-                         ", height=" + std::to_string(height) + ", stride=" + std::to_string(stride) + ")");
+    try {
+        dispatch_log(ZZT_QRCODE_LOG_LEVEL_WARN,
+                     std::string("Warning in ") + fn + ": " + reason + " (format=" +
+                             std::to_string(static_cast<int>(format)) + ", width=" + std::to_string(width) +
+                             ", height=" + std::to_string(height) + ", stride=" + std::to_string(stride) + ")");
+    } catch (...) {
+        // Logging must never change C API behavior.
+    }
+}
+
+static void log_warn_index(const char* fn, int index, size_t count) {
+    if (!has_log_callback()) {
+        return;
+    }
+    try {
+        dispatch_log(ZZT_QRCODE_LOG_LEVEL_WARN,
+                     std::string("Warning in ") + fn + ": invalid result index (index=" + std::to_string(index) +
+                             ", count=" + std::to_string(count) + ")");
+    } catch (...) {
+        // Logging must never change C API behavior.
+    }
 }
 
 static int bytes_per_pixel(zzt_qrcode_pixel_format_t format) {
@@ -394,10 +436,12 @@ zzt_qrcode_get_result_text(zzt_qrcode_result_h result, int index, char *output_t
             log_warn("zzt_qrcode_get_result_text", "invalid result handle");
             return ZZT_QRCODE_ERROR_INVALID_HANDLE;
         }
-        if (index < 0 || index >= static_cast<int>(result_ptr->size())) {
+        size_t result_count = result_ptr->size();
+        if (index < 0 || static_cast<size_t>(index) >= result_count) {
             if (buffer_size) {
                 *buffer_size = 0;
             }
+            log_warn_index("zzt_qrcode_get_result_text", index, result_count);
             return ZZT_QRCODE_ERROR_INVALID_INDEX;
         }
         const std::string &text = result_ptr->at(index)->get_text();
@@ -431,10 +475,12 @@ zzt_qrcode_get_result_points(zzt_qrcode_result_h result, int index, float *outpu
             log_warn("zzt_qrcode_get_result_points", "invalid result handle");
             return ZZT_QRCODE_ERROR_INVALID_HANDLE;
         }
-        if (index < 0 || index >= (int)result_ptr->size()) {
+        size_t result_count = result_ptr->size();
+        if (index < 0 || static_cast<size_t>(index) >= result_count) {
             if (buffer_size) {
                 *buffer_size = 0;
             }
+            log_warn_index("zzt_qrcode_get_result_points", index, result_count);
             return ZZT_QRCODE_ERROR_INVALID_INDEX;
         }
         const cv::Mat &result_points = result_ptr->at(index)->get_result_points();
