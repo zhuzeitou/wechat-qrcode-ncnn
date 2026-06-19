@@ -21,6 +21,11 @@ namespace {
 std::mutex g_log_callback_mutex;
 zzt_qrcode_log_callback_t g_log_callback = nullptr;
 
+bool has_log_callback() {
+    std::lock_guard<std::mutex> lock(g_log_callback_mutex);
+    return g_log_callback != nullptr;
+}
+
 void dispatch_log(zzt_qrcode_log_level_t level, const std::string& message) {
     zzt_qrcode_log_callback_t callback = nullptr;
     {
@@ -40,11 +45,65 @@ void dispatch_log(zzt_qrcode_log_level_t level, const std::string& message) {
 }
 
 static void log_exception(const char* fn, const std::exception& e) {
+    if (!has_log_callback()) {
+        return;
+    }
+    if (std::string(fn) == "zzt_qrcode_detect_and_decode_path_u8" ||
+        std::string(fn) == "zzt_qrcode_detect_and_decode_path_u16") {
+        dispatch_log(ZZT_QRCODE_LOG_LEVEL_ERROR, std::string("Exception in ") + fn);
+        return;
+    }
     dispatch_log(ZZT_QRCODE_LOG_LEVEL_ERROR, std::string("Exception in ") + fn + ": " + e.what());
 }
 
 static void log_unknown(const char* fn) {
+    if (!has_log_callback()) {
+        return;
+    }
     dispatch_log(ZZT_QRCODE_LOG_LEVEL_ERROR, std::string("Unknown exception in ") + fn);
+}
+
+static void log_warn(const char* fn, const char* reason) {
+    if (!has_log_callback()) {
+        return;
+    }
+    dispatch_log(ZZT_QRCODE_LOG_LEVEL_WARN, std::string("Warning in ") + fn + ": " + reason);
+}
+
+static void log_warn_int(const char* fn, const char* reason, const char* name, int value) {
+    if (!has_log_callback()) {
+        return;
+    }
+    dispatch_log(ZZT_QRCODE_LOG_LEVEL_WARN,
+                 std::string("Warning in ") + fn + ": " + reason + " (" + name + "=" + std::to_string(value) + ")");
+}
+
+static void log_warn_pixels(const char* fn, const char* reason, zzt_qrcode_pixel_format_t format, int width, int height,
+                            int stride) {
+    if (!has_log_callback()) {
+        return;
+    }
+    dispatch_log(ZZT_QRCODE_LOG_LEVEL_WARN,
+                 std::string("Warning in ") + fn + ": " + reason + " (format=" +
+                         std::to_string(static_cast<int>(format)) + ", width=" + std::to_string(width) +
+                         ", height=" + std::to_string(height) + ", stride=" + std::to_string(stride) + ")");
+}
+
+static int bytes_per_pixel(zzt_qrcode_pixel_format_t format) {
+    switch (format) {
+        case ZZT_QRCODE_PIXEL_GRAY:
+            return 1;
+        case ZZT_QRCODE_PIXEL_RGB:
+        case ZZT_QRCODE_PIXEL_BGR:
+            return 3;
+        case ZZT_QRCODE_PIXEL_RGBA:
+        case ZZT_QRCODE_PIXEL_BGRA:
+        case ZZT_QRCODE_PIXEL_ARGB:
+        case ZZT_QRCODE_PIXEL_ABGR:
+            return 4;
+        default:
+            return 0;
+    }
 }
 
 }  // namespace
@@ -101,25 +160,33 @@ zzt_qrcode_detector_h zzt_qrcode_create_detector() {
 zzt_qrcode_error_t zzt_qrcode_release_detector(zzt_qrcode_detector_h detector) {
     return catch_exceptions("zzt_qrcode_release_detector", [&] {
         if (detector == nullptr) {
+            log_warn("zzt_qrcode_release_detector", "invalid detector handle");
             return ZZT_QRCODE_ERROR_INVALID_HANDLE;
         }
-        return WeChatQRCode::release_handle(detector) ? ZZT_QRCODE_OK : ZZT_QRCODE_ERROR_INVALID_HANDLE;
+        if (!WeChatQRCode::release_handle(detector)) {
+            log_warn("zzt_qrcode_release_detector", "invalid detector handle");
+            return ZZT_QRCODE_ERROR_INVALID_HANDLE;
+        }
+        return ZZT_QRCODE_OK;
     });
 }
 
-static zzt_qrcode_error_t qrcode_detect_and_decode_internal(zzt_qrcode_detector_h detector, cv::Mat &img,
-                                                          zzt_qrcode_result_h *out_result) {
+static zzt_qrcode_error_t qrcode_detect_and_decode_internal(const char* fn, zzt_qrcode_detector_h detector, cv::Mat &img,
+                                                           zzt_qrcode_result_h *out_result) {
     if (out_result == nullptr) {
+        log_warn(fn, "null out_result pointer");
         return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
     }
     *out_result = nullptr;
 
     auto detector_ptr = WeChatQRCode::get(detector);
     if (detector_ptr == nullptr) {
+        log_warn(fn, "invalid detector handle");
         return ZZT_QRCODE_ERROR_INVALID_HANDLE;
     }
 
     if (img.empty()) {
+        log_warn(fn, "image decode failed");
         return ZZT_QRCODE_ERROR_DECODE_FAILED;
     }
 
@@ -142,16 +209,22 @@ zzt_qrcode_detect_and_decode_data(zzt_qrcode_detector_h detector, const unsigned
                                   zzt_qrcode_result_h *out_result) {
     return catch_exceptions("zzt_qrcode_detect_and_decode_data", [&] {
         if (out_result == nullptr) {
+            log_warn("zzt_qrcode_detect_and_decode_data", "null out_result pointer");
             return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
         }
         *out_result = nullptr;
 
-        if (data == nullptr || data_len <= 0) {
+        if (data == nullptr) {
+            log_warn("zzt_qrcode_detect_and_decode_data", "null data pointer");
+            return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
+        }
+        if (data_len <= 0) {
+            log_warn_int("zzt_qrcode_detect_and_decode_data", "invalid data length", "data_len", data_len);
             return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
         }
         std::vector bytes_vector(data, data + data_len);
         cv::Mat img = cv::imdecode(bytes_vector, cv::IMREAD_GRAYSCALE);
-        return qrcode_detect_and_decode_internal(detector, img, out_result);
+        return qrcode_detect_and_decode_internal("zzt_qrcode_detect_and_decode_data", detector, img, out_result);
     });
 }
 
@@ -160,11 +233,13 @@ zzt_qrcode_detect_and_decode_path_u8(zzt_qrcode_detector_h detector, const char8
                                      zzt_qrcode_result_h *out_result) {
     return catch_exceptions("zzt_qrcode_detect_and_decode_path_u8", [&] {
         if (out_result == nullptr) {
+            log_warn("zzt_qrcode_detect_and_decode_path_u8", "null out_result pointer");
             return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
         }
         *out_result = nullptr;
 
         if (path == nullptr) {
+            log_warn("zzt_qrcode_detect_and_decode_path_u8", "null path pointer");
             return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
         }
 
@@ -174,7 +249,7 @@ zzt_qrcode_detect_and_decode_path_u8(zzt_qrcode_detector_h detector, const char8
         std::filesystem::path fs_path = std::filesystem::u8path(reinterpret_cast<const char*>(path));
 #endif
         cv::Mat img = cv::imread(fs_path.string(), cv::IMREAD_GRAYSCALE);
-        return qrcode_detect_and_decode_internal(detector, img, out_result);
+        return qrcode_detect_and_decode_internal("zzt_qrcode_detect_and_decode_path_u8", detector, img, out_result);
     });
 }
 
@@ -183,17 +258,19 @@ zzt_qrcode_detect_and_decode_path_u16(zzt_qrcode_detector_h detector, const char
                                       zzt_qrcode_result_h *out_result) {
     return catch_exceptions("zzt_qrcode_detect_and_decode_path_u16", [&] {
         if (out_result == nullptr) {
+            log_warn("zzt_qrcode_detect_and_decode_path_u16", "null out_result pointer");
             return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
         }
         *out_result = nullptr;
 
         if (path == nullptr) {
+            log_warn("zzt_qrcode_detect_and_decode_path_u16", "null path pointer");
             return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
         }
 
         std::filesystem::path fs_path(path);
         cv::Mat img = cv::imread(fs_path.string(), cv::IMREAD_GRAYSCALE);
-        return qrcode_detect_and_decode_internal(detector, img, out_result);
+        return qrcode_detect_and_decode_internal("zzt_qrcode_detect_and_decode_path_u16", detector, img, out_result);
     });
 }
 
@@ -203,11 +280,27 @@ zzt_qrcode_detect_and_decode_pixels(zzt_qrcode_detector_h detector, const unsign
                                     zzt_qrcode_result_h *out_result) {
     return catch_exceptions("zzt_qrcode_detect_and_decode_pixels", [&] {
         if (out_result == nullptr) {
+            log_warn("zzt_qrcode_detect_and_decode_pixels", "null out_result pointer");
             return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
         }
         *out_result = nullptr;
 
-        if (pixels == nullptr || width <= 0 || height <= 0) {
+        if (pixels == nullptr) {
+            log_warn_pixels("zzt_qrcode_detect_and_decode_pixels", "null pixels pointer", format, width, height, stride);
+            return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
+        }
+        if (width <= 0 || height <= 0) {
+            log_warn_pixels("zzt_qrcode_detect_and_decode_pixels", "invalid dimensions", format, width, height, stride);
+            return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
+        }
+
+        int pixel_stride = bytes_per_pixel(format);
+        if (pixel_stride == 0) {
+            log_warn_pixels("zzt_qrcode_detect_and_decode_pixels", "unsupported pixel format", format, width, height, stride);
+            return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
+        }
+        if (stride > 0 && static_cast<long long>(stride) < static_cast<long long>(width) * pixel_stride) {
+            log_warn_pixels("zzt_qrcode_detect_and_decode_pixels", "invalid stride", format, width, height, stride);
             return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
         }
 
@@ -238,6 +331,8 @@ zzt_qrcode_detect_and_decode_pixels(zzt_qrcode_detector_h detector, const unsign
                 actual_pixels = pixels + 1;
                 break;
             default:
+                log_warn_pixels("zzt_qrcode_detect_and_decode_pixels", "unsupported pixel format", format, width, height,
+                                stride);
                 return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
         }
 
@@ -252,16 +347,21 @@ zzt_qrcode_detect_and_decode_pixels(zzt_qrcode_detector_h detector, const unsign
         img.create(height, width, CV_8UC1);
         ncnn_img.to_pixels(img.data, ncnn::Mat::PIXEL_GRAY);
 
-        return qrcode_detect_and_decode_internal(detector, img, out_result);
+        return qrcode_detect_and_decode_internal("zzt_qrcode_detect_and_decode_pixels", detector, img, out_result);
     });
 }
 
 zzt_qrcode_error_t zzt_qrcode_release_result(zzt_qrcode_result_h result) {
     return catch_exceptions("zzt_qrcode_release_result", [&] {
         if (result == nullptr) {
+            log_warn("zzt_qrcode_release_result", "invalid result handle");
             return ZZT_QRCODE_ERROR_INVALID_HANDLE;
         }
-        return QrcodeResultList::release_handle(result) ? ZZT_QRCODE_OK : ZZT_QRCODE_ERROR_INVALID_HANDLE;
+        if (!QrcodeResultList::release_handle(result)) {
+            log_warn("zzt_qrcode_release_result", "invalid result handle");
+            return ZZT_QRCODE_ERROR_INVALID_HANDLE;
+        }
+        return ZZT_QRCODE_OK;
     });
 }
 
@@ -273,6 +373,7 @@ zzt_qrcode_get_result_size(zzt_qrcode_result_h result, int *size) {
             if (size) {
                 *size = 0;
             }
+            log_warn("zzt_qrcode_get_result_size", "invalid result handle");
             return ZZT_QRCODE_ERROR_INVALID_HANDLE;
         }
         if (size) {
@@ -290,6 +391,7 @@ zzt_qrcode_get_result_text(zzt_qrcode_result_h result, int index, char *output_t
             if (buffer_size) {
                 *buffer_size = 0;
             }
+            log_warn("zzt_qrcode_get_result_text", "invalid result handle");
             return ZZT_QRCODE_ERROR_INVALID_HANDLE;
         }
         if (index < 0 || index >= static_cast<int>(result_ptr->size())) {
@@ -326,6 +428,7 @@ zzt_qrcode_get_result_points(zzt_qrcode_result_h result, int index, float *outpu
             if (buffer_size) {
                 *buffer_size = 0;
             }
+            log_warn("zzt_qrcode_get_result_points", "invalid result handle");
             return ZZT_QRCODE_ERROR_INVALID_HANDLE;
         }
         if (index < 0 || index >= (int)result_ptr->size()) {
