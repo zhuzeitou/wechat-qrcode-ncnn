@@ -99,6 +99,19 @@ typedef void (*zzt_qrcode_log_callback_t)(zzt_qrcode_log_level_t level, const ch
 ZZT_QRCODE_API zzt_qrcode_error_t zzt_qrcode_set_log_callback(zzt_qrcode_log_callback_t callback);
 
 /**
+ * Set the process-wide minimum log level.
+ *
+ * Messages below this level will be suppressed (not constructed/dispatched).
+ * The default minimum log level is ZZT_QRCODE_LOG_LEVEL_WARN.
+ * Setting the minimum level does not affect callback installation or removal.
+ *
+ * @param min_level The minimum log level to set. Valid range is 0 to 4 (inclusive).
+ * @return ZZT_QRCODE_OK Success
+ *         ZZT_QRCODE_ERROR_INVALID_ARGUMENT If min_level is not a valid enum value
+ */
+ZZT_QRCODE_API zzt_qrcode_error_t zzt_qrcode_set_log_level(zzt_qrcode_log_level_t min_level);
+
+/**
  * Create a QR code detector instance.
  * @return Returns the detector handle, or NULL if failed.
  */

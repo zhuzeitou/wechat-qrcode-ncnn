@@ -42,6 +42,9 @@ internal object NativeLib {
     @JvmStatic
     external fun getLastError(): Int
 
+    @JvmStatic
+    external fun setLogLevel(minLevel: Int): Int
+
     /**
      * Bridge method called by JNI ([native_log_callback]) to dispatch native
      * log messages to the managed [QrcodeLog] listener list.

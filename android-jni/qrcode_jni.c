@@ -107,6 +107,11 @@ static int utf8_to_utf16(const char8_t *src, int src_len, char16_t *dst, int dst
     return out;
 }
 
+jint zzt_qrcode_set_log_level_jni(JNIEnv *env, jclass clazz, jint level) {
+    last_error = zzt_qrcode_set_log_level((zzt_qrcode_log_level_t) level);
+    return (jint) last_error;
+}
+
 jint zzt_qrcode_get_last_error_jni(JNIEnv *env, jclass clazz) {
     return (jint) last_error;
 }
@@ -488,6 +493,7 @@ jint JNI_OnLoad(JavaVM *vm, void *reserved) {
             {"getResultText",         "(JI)Ljava/lang/String;", (void *) zzt_qrcode_get_result_text_jni},
             {"getResultPoints",       "(JI)[[F",                (void *) zzt_qrcode_get_result_points_jni},
             {"getLastError",          "()I",                    (void *) zzt_qrcode_get_last_error_jni},
+            {"setLogLevel",           "(I)I",                   (void *) zzt_qrcode_set_log_level_jni},
     };
     ret = (*env)->RegisterNatives(env, cls, methods, sizeof(methods) / sizeof(methods[0]));
     (*env)->DeleteLocalRef(env, cls);

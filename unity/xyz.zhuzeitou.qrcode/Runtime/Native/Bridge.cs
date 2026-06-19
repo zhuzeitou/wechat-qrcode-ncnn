@@ -98,6 +98,9 @@ namespace ZZT.QRCode.Native
         [DllImport(DLLName, EntryPoint = "zzt_qrcode_set_log_callback", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int SetLogCallback(NativeLogCallback callback);
 
+        [DllImport(DLLName, EntryPoint = "zzt_qrcode_set_log_level", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int SetLogLevel(int minLevel);
+
         /// <summary>
         /// Ensure the native callback is installed.  Safe to call multiple times.
         /// </summary>

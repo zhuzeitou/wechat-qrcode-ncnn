@@ -172,4 +172,24 @@ public class NativeLib {
     public static native float[][] getResultPoints(long nativeResult, int index);
 
     public static native int getLastError();
+    
+    /**
+     * Sets the minimum log level for the QR code library.
+     * Native log messages below this level will be filtered out before dispatch.
+     * <p>
+     * This is a process-wide setting. The default level is 3 (WARN).
+     * Valid values are:
+     * <ul>
+     *   <li>0: VERBOSE (enables performance diagnostics)</li>
+     *   <li>1: DEBUG</li>
+     *   <li>2: INFO</li>
+     *   <li>3: WARN</li>
+     *   <li>4: ERROR</li>
+     * </ul>
+     *
+     * @param minLevel the minimum log level.
+     * @return 0 on success (ZZT_QRCODE_OK), or a non-zero error code if the level is invalid
+     *         (e.g., ZZT_QRCODE_ERROR_INVALID_ARGUMENT).
+     */
+    public static native int setLogLevel(int minLevel);
 }

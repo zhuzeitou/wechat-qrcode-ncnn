@@ -1,6 +1,8 @@
 #include "zzt_qrcode/qrcode.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -21,17 +23,18 @@ namespace {
 
 std::mutex g_log_callback_mutex;
 zzt_qrcode_log_callback_t g_log_callback = nullptr;
+std::atomic<int> g_min_log_level{ZZT_QRCODE_LOG_LEVEL_WARN};
+std::atomic<bool> g_log_callback_installed{false};
 
-bool has_log_callback() {
-    try {
-        std::lock_guard<std::mutex> lock(g_log_callback_mutex);
-        return g_log_callback != nullptr;
-    } catch (...) {
-        return false;
-    }
+bool can_log(zzt_qrcode_log_level_t level) {
+    return g_log_callback_installed.load(std::memory_order_acquire) &&
+           (static_cast<int>(level) >= g_min_log_level.load(std::memory_order_relaxed));
 }
 
 void dispatch_log(zzt_qrcode_log_level_t level, const std::string& message) {
+    if (!can_log(level)) {
+        return;
+    }
     try {
         zzt_qrcode_log_callback_t callback = nullptr;
         {
@@ -49,13 +52,57 @@ void dispatch_log(zzt_qrcode_log_level_t level, const std::string& message) {
     }
 }
 
+struct TimingGate {
+    bool enabled;
+    std::chrono::steady_clock::time_point start;
+
+    TimingGate(zzt_qrcode_log_level_t level) {
+        enabled = can_log(level);
+        if (enabled) {
+            start = std::chrono::steady_clock::now();
+        }
+    }
+
+    double elapsed_ms() const {
+        if (!enabled) return 0.0;
+        auto end = std::chrono::steady_clock::now();
+        return std::chrono::duration<double, std::milli>(end - start).count();
+    }
+};
+
+struct TotalDurationLogger {
+    const char* fn;
+    bool enabled;
+    std::chrono::steady_clock::time_point start;
+
+    TotalDurationLogger(const char* func, zzt_qrcode_log_level_t level) : fn(func) {
+        enabled = can_log(level);
+        if (enabled) {
+            start = std::chrono::steady_clock::now();
+        }
+    }
+
+    ~TotalDurationLogger() {
+        if (enabled) {
+            try {
+                auto end = std::chrono::steady_clock::now();
+                double elapsed = std::chrono::duration<double, std::milli>(end - start).count();
+                dispatch_log(ZZT_QRCODE_LOG_LEVEL_VERBOSE,
+                             std::string(fn) + ": total duration: " + std::to_string(elapsed) + " ms");
+            } catch (...) {
+                // Destructors must not throw exceptions
+            }
+        }
+    }
+};
+
 static bool is_path_decode_function(const char* fn) {
     return std::strcmp(fn, "zzt_qrcode_detect_and_decode_path_u8") == 0 ||
            std::strcmp(fn, "zzt_qrcode_detect_and_decode_path_u16") == 0;
 }
 
 static void log_exception(const char* fn, const std::exception& e) {
-    if (!has_log_callback()) {
+    if (!can_log(ZZT_QRCODE_LOG_LEVEL_ERROR)) {
         return;
     }
     try {
@@ -70,7 +117,7 @@ static void log_exception(const char* fn, const std::exception& e) {
 }
 
 static void log_unknown(const char* fn) {
-    if (!has_log_callback()) {
+    if (!can_log(ZZT_QRCODE_LOG_LEVEL_ERROR)) {
         return;
     }
     try {
@@ -81,7 +128,7 @@ static void log_unknown(const char* fn) {
 }
 
 static void log_warn(const char* fn, const char* reason) {
-    if (!has_log_callback()) {
+    if (!can_log(ZZT_QRCODE_LOG_LEVEL_WARN)) {
         return;
     }
     try {
@@ -92,7 +139,7 @@ static void log_warn(const char* fn, const char* reason) {
 }
 
 static void log_warn_int(const char* fn, const char* reason, const char* name, int value) {
-    if (!has_log_callback()) {
+    if (!can_log(ZZT_QRCODE_LOG_LEVEL_WARN)) {
         return;
     }
     try {
@@ -105,7 +152,7 @@ static void log_warn_int(const char* fn, const char* reason, const char* name, i
 
 static void log_warn_pixels(const char* fn, const char* reason, zzt_qrcode_pixel_format_t format, int width, int height,
                             int stride) {
-    if (!has_log_callback()) {
+    if (!can_log(ZZT_QRCODE_LOG_LEVEL_WARN)) {
         return;
     }
     try {
@@ -119,7 +166,7 @@ static void log_warn_pixels(const char* fn, const char* reason, zzt_qrcode_pixel
 }
 
 static void log_warn_index(const char* fn, int index, size_t count) {
-    if (!has_log_callback()) {
+    if (!can_log(ZZT_QRCODE_LOG_LEVEL_WARN)) {
         return;
     }
     try {
@@ -174,6 +221,7 @@ zzt_qrcode_error_t zzt_qrcode_set_log_callback(zzt_qrcode_log_callback_t callbac
     try {
         std::lock_guard<std::mutex> lock(g_log_callback_mutex);
         g_log_callback = callback;
+        g_log_callback_installed.store(callback != nullptr, std::memory_order_release);
         return ZZT_QRCODE_OK;
     } catch (const std::exception& e) {
         log_exception("zzt_qrcode_set_log_callback", e);
@@ -182,6 +230,15 @@ zzt_qrcode_error_t zzt_qrcode_set_log_callback(zzt_qrcode_log_callback_t callbac
         log_unknown("zzt_qrcode_set_log_callback");
         return ZZT_QRCODE_ERROR_INTERNAL;
     }
+}
+
+zzt_qrcode_error_t zzt_qrcode_set_log_level(zzt_qrcode_log_level_t min_level) {
+    if (min_level < 0 || min_level > 4) {
+        log_warn("zzt_qrcode_set_log_level", "invalid log level");
+        return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
+    }
+    g_min_log_level.store(static_cast<int>(min_level), std::memory_order_release);
+    return ZZT_QRCODE_OK;
 }
 
 zzt_qrcode_detector_h zzt_qrcode_create_detector() {
@@ -233,7 +290,18 @@ static zzt_qrcode_error_t qrcode_detect_and_decode_internal(const char* fn, zzt_
     }
 
     std::vector<cv::Mat> points;
-    auto results = detector_ptr->detectAndDecode(img, points);
+    std::vector<std::string> results;
+    {
+        TimingGate detect_timing(ZZT_QRCODE_LOG_LEVEL_VERBOSE);
+        results = detector_ptr->detectAndDecode(img, points);
+        if (detect_timing.enabled) {
+            dispatch_log(ZZT_QRCODE_LOG_LEVEL_VERBOSE,
+                         std::string(fn) + ": internal detectAndDecode duration: " +
+                         std::to_string(detect_timing.elapsed_ms()) + " ms, results count: " +
+                         std::to_string(results.size()));
+        }
+    }
+
     size_t result_len = results.size();
     QrcodeResultList result_vector;
     if (result_len > 0) {
@@ -249,6 +317,7 @@ static zzt_qrcode_error_t qrcode_detect_and_decode_internal(const char* fn, zzt_
 zzt_qrcode_error_t
 zzt_qrcode_detect_and_decode_data(zzt_qrcode_detector_h detector, const unsigned char *data, int data_len,
                                   zzt_qrcode_result_h *out_result) {
+    TotalDurationLogger total_logger("zzt_qrcode_detect_and_decode_data", ZZT_QRCODE_LOG_LEVEL_VERBOSE);
     return catch_exceptions("zzt_qrcode_detect_and_decode_data", [&] {
         if (out_result == nullptr) {
             log_warn("zzt_qrcode_detect_and_decode_data", "null out_result pointer");
@@ -264,8 +333,24 @@ zzt_qrcode_detect_and_decode_data(zzt_qrcode_detector_h detector, const unsigned
             log_warn_int("zzt_qrcode_detect_and_decode_data", "invalid data length", "data_len", data_len);
             return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
         }
-        std::vector bytes_vector(data, data + data_len);
-        cv::Mat img = cv::imdecode(bytes_vector, cv::IMREAD_GRAYSCALE);
+
+        cv::Mat img;
+        {
+            TimingGate decode_timing(ZZT_QRCODE_LOG_LEVEL_VERBOSE);
+            std::vector bytes_vector(data, data + data_len);
+            img = cv::imdecode(bytes_vector, cv::IMREAD_GRAYSCALE);
+            if (decode_timing.enabled) {
+                dispatch_log(ZZT_QRCODE_LOG_LEVEL_VERBOSE,
+                             "zzt_qrcode_detect_and_decode_data: image decode/preparation duration: " +
+                             std::to_string(decode_timing.elapsed_ms()) + " ms");
+            }
+        }
+
+        if (img.empty()) {
+            log_warn("zzt_qrcode_detect_and_decode_data", "encoded image decode failed");
+            return ZZT_QRCODE_ERROR_DECODE_FAILED;
+        }
+
         return qrcode_detect_and_decode_internal("zzt_qrcode_detect_and_decode_data", detector, img, out_result);
     });
 }
@@ -273,6 +358,7 @@ zzt_qrcode_detect_and_decode_data(zzt_qrcode_detector_h detector, const unsigned
 zzt_qrcode_error_t
 zzt_qrcode_detect_and_decode_path_u8(zzt_qrcode_detector_h detector, const char8_t *path,
                                      zzt_qrcode_result_h *out_result) {
+    TotalDurationLogger total_logger("zzt_qrcode_detect_and_decode_path_u8", ZZT_QRCODE_LOG_LEVEL_VERBOSE);
     return catch_exceptions("zzt_qrcode_detect_and_decode_path_u8", [&] {
         if (out_result == nullptr) {
             log_warn("zzt_qrcode_detect_and_decode_path_u8", "null out_result pointer");
@@ -290,7 +376,22 @@ zzt_qrcode_detect_and_decode_path_u8(zzt_qrcode_detector_h detector, const char8
 #else
         std::filesystem::path fs_path = std::filesystem::u8path(reinterpret_cast<const char*>(path));
 #endif
-        cv::Mat img = cv::imread(fs_path.string(), cv::IMREAD_GRAYSCALE);
+        cv::Mat img;
+        {
+            TimingGate load_timing(ZZT_QRCODE_LOG_LEVEL_VERBOSE);
+            img = cv::imread(fs_path.string(), cv::IMREAD_GRAYSCALE);
+            if (load_timing.enabled) {
+                dispatch_log(ZZT_QRCODE_LOG_LEVEL_VERBOSE,
+                             "zzt_qrcode_detect_and_decode_path_u8: image load/decode duration: " +
+                             std::to_string(load_timing.elapsed_ms()) + " ms");
+            }
+        }
+
+        if (img.empty()) {
+            log_warn("zzt_qrcode_detect_and_decode_path_u8", "path image load/decode failed");
+            return ZZT_QRCODE_ERROR_DECODE_FAILED;
+        }
+
         return qrcode_detect_and_decode_internal("zzt_qrcode_detect_and_decode_path_u8", detector, img, out_result);
     });
 }
@@ -298,6 +399,7 @@ zzt_qrcode_detect_and_decode_path_u8(zzt_qrcode_detector_h detector, const char8
 zzt_qrcode_error_t
 zzt_qrcode_detect_and_decode_path_u16(zzt_qrcode_detector_h detector, const char16_t *path,
                                       zzt_qrcode_result_h *out_result) {
+    TotalDurationLogger total_logger("zzt_qrcode_detect_and_decode_path_u16", ZZT_QRCODE_LOG_LEVEL_VERBOSE);
     return catch_exceptions("zzt_qrcode_detect_and_decode_path_u16", [&] {
         if (out_result == nullptr) {
             log_warn("zzt_qrcode_detect_and_decode_path_u16", "null out_result pointer");
@@ -311,7 +413,22 @@ zzt_qrcode_detect_and_decode_path_u16(zzt_qrcode_detector_h detector, const char
         }
 
         std::filesystem::path fs_path(path);
-        cv::Mat img = cv::imread(fs_path.string(), cv::IMREAD_GRAYSCALE);
+        cv::Mat img;
+        {
+            TimingGate load_timing(ZZT_QRCODE_LOG_LEVEL_VERBOSE);
+            img = cv::imread(fs_path.string(), cv::IMREAD_GRAYSCALE);
+            if (load_timing.enabled) {
+                dispatch_log(ZZT_QRCODE_LOG_LEVEL_VERBOSE,
+                             "zzt_qrcode_detect_and_decode_path_u16: image load/decode duration: " +
+                             std::to_string(load_timing.elapsed_ms()) + " ms");
+            }
+        }
+
+        if (img.empty()) {
+            log_warn("zzt_qrcode_detect_and_decode_path_u16", "path image load/decode failed");
+            return ZZT_QRCODE_ERROR_DECODE_FAILED;
+        }
+
         return qrcode_detect_and_decode_internal("zzt_qrcode_detect_and_decode_path_u16", detector, img, out_result);
     });
 }
@@ -320,6 +437,7 @@ zzt_qrcode_error_t
 zzt_qrcode_detect_and_decode_pixels(zzt_qrcode_detector_h detector, const unsigned char *pixels,
                                     zzt_qrcode_pixel_format_t format, int width, int height, int stride,
                                     zzt_qrcode_result_h *out_result) {
+    TotalDurationLogger total_logger("zzt_qrcode_detect_and_decode_pixels", ZZT_QRCODE_LOG_LEVEL_VERBOSE);
     return catch_exceptions("zzt_qrcode_detect_and_decode_pixels", [&] {
         if (out_result == nullptr) {
             log_warn("zzt_qrcode_detect_and_decode_pixels", "null out_result pointer");
@@ -346,48 +464,65 @@ zzt_qrcode_detect_and_decode_pixels(zzt_qrcode_detector_h detector, const unsign
             return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
         }
 
-        ncnn::Mat::PixelType pixel_type;
-        const unsigned char *actual_pixels = pixels;
-        switch (format) {
-            case ZZT_QRCODE_PIXEL_GRAY:
-                pixel_type = ncnn::Mat::PIXEL_GRAY;
-                break;
-            case ZZT_QRCODE_PIXEL_RGB:
-                pixel_type = ncnn::Mat::PIXEL_RGB2GRAY;
-                break;
-            case ZZT_QRCODE_PIXEL_BGR:
-                pixel_type = ncnn::Mat::PIXEL_BGR2GRAY;
-                break;
-            case ZZT_QRCODE_PIXEL_RGBA:
-                pixel_type = ncnn::Mat::PIXEL_RGBA2GRAY;
-                break;
-            case ZZT_QRCODE_PIXEL_BGRA:
-                pixel_type = ncnn::Mat::PIXEL_BGRA2GRAY;
-                break;
-            case ZZT_QRCODE_PIXEL_ARGB:
-                pixel_type = ncnn::Mat::PIXEL_RGBA2GRAY;
-                actual_pixels = pixels + 1;
-                break;
-            case ZZT_QRCODE_PIXEL_ABGR:
-                pixel_type = ncnn::Mat::PIXEL_BGRA2GRAY;
-                actual_pixels = pixels + 1;
-                break;
-            default:
-                log_warn_pixels("zzt_qrcode_detect_and_decode_pixels", "unsupported pixel format", format, width, height,
-                                stride);
-                return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
-        }
-
-        ncnn::Mat ncnn_img;
-        if (stride > 0) {
-            ncnn_img = ncnn::Mat::from_pixels(actual_pixels, pixel_type, width, height, stride);
-        } else {
-            ncnn_img = ncnn::Mat::from_pixels(actual_pixels, pixel_type, width, height);
-        }
-
         cv::Mat img;
-        img.create(height, width, CV_8UC1);
-        ncnn_img.to_pixels(img.data, ncnn::Mat::PIXEL_GRAY);
+        {
+            TimingGate prep_timing(ZZT_QRCODE_LOG_LEVEL_VERBOSE);
+            ncnn::Mat::PixelType pixel_type;
+            const unsigned char *actual_pixels = pixels;
+            switch (format) {
+                case ZZT_QRCODE_PIXEL_GRAY:
+                    pixel_type = ncnn::Mat::PIXEL_GRAY;
+                    break;
+                case ZZT_QRCODE_PIXEL_RGB:
+                    pixel_type = ncnn::Mat::PIXEL_RGB2GRAY;
+                    break;
+                case ZZT_QRCODE_PIXEL_BGR:
+                    pixel_type = ncnn::Mat::PIXEL_BGR2GRAY;
+                    break;
+                case ZZT_QRCODE_PIXEL_RGBA:
+                    pixel_type = ncnn::Mat::PIXEL_RGBA2GRAY;
+                    break;
+                case ZZT_QRCODE_PIXEL_BGRA:
+                    pixel_type = ncnn::Mat::PIXEL_BGRA2GRAY;
+                    break;
+                case ZZT_QRCODE_PIXEL_ARGB:
+                    pixel_type = ncnn::Mat::PIXEL_RGBA2GRAY;
+                    actual_pixels = pixels + 1;
+                    break;
+                case ZZT_QRCODE_PIXEL_ABGR:
+                    pixel_type = ncnn::Mat::PIXEL_BGRA2GRAY;
+                    actual_pixels = pixels + 1;
+                    break;
+                default:
+                    // This is unreachable since pixel_stride checks format range, but keep for safety.
+                    log_warn_pixels("zzt_qrcode_detect_and_decode_pixels", "unsupported pixel format", format, width, height,
+                                    stride);
+                    return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
+            }
+
+            ncnn::Mat ncnn_img;
+            if (stride > 0) {
+                ncnn_img = ncnn::Mat::from_pixels(actual_pixels, pixel_type, width, height, stride);
+            } else {
+                ncnn_img = ncnn::Mat::from_pixels(actual_pixels, pixel_type, width, height);
+            }
+
+            img.create(height, width, CV_8UC1);
+            ncnn_img.to_pixels(img.data, ncnn::Mat::PIXEL_GRAY);
+
+            if (prep_timing.enabled) {
+                dispatch_log(ZZT_QRCODE_LOG_LEVEL_VERBOSE,
+                             "zzt_qrcode_detect_and_decode_pixels: pixel conversion/prep duration: " +
+                             std::to_string(prep_timing.elapsed_ms()) + " ms (format=" +
+                             std::to_string(static_cast<int>(format)) + ", width=" + std::to_string(width) +
+                             ", height=" + std::to_string(height) + ", stride=" + std::to_string(stride) + ")");
+            }
+        }
+
+        if (img.empty()) {
+            log_warn_pixels("zzt_qrcode_detect_and_decode_pixels", "raw pixel conversion/input failure", format, width, height, stride);
+            return ZZT_QRCODE_ERROR_DECODE_FAILED;
+        }
 
         return qrcode_detect_and_decode_internal("zzt_qrcode_detect_and_decode_pixels", detector, img, out_result);
     });

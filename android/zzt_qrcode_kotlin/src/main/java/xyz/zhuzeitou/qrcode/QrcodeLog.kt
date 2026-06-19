@@ -124,6 +124,29 @@ object QrcodeLog {
     }
 
     /**
+     * Sets the process-wide minimum log level.
+     * Native log messages below this level will be filtered out before dispatch.
+     *
+     * Valid values are:
+     * - 0: VERBOSE (enables performance diagnostics)
+     * - 1: DEBUG
+     * - 2: INFO
+     * - 3: WARN (default)
+     * - 4: ERROR
+     *
+     * @param minLevel The minimum log level to set.
+     * @return 0 on success (ZZT_QRCODE_OK), or a non-zero error code if the level is invalid.
+     *
+     * ### Android Caveat
+     * JNI currently installs the native callback unconditionally during initialization.
+     * Lowering the minimum level will cause the native library to dispatch messages
+     * through JNI even if no JVM-side listeners are registered in [QrcodeLog].
+     */
+    fun setMinimumLevel(minLevel: Int): Int {
+        return NativeLib.setLogLevel(minLevel)
+    }
+
+    /**
      * Dispatches a log message to all registered callbacks.
      *
      * This is the internal entry point called from [NativeLib.dispatchLog].

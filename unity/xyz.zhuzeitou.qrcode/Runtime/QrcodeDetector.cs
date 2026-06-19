@@ -108,6 +108,23 @@ namespace ZZT.QRCode
         }
 
         /// <summary>
+        /// Sets the process-wide minimum log level for the native library.
+        /// Native log messages below this level will be filtered out before dispatch.
+        /// <para>
+        /// The process-wide default is <see cref="LogLevel.Warn"/>.
+        /// Setting the level to <see cref="LogLevel.Verbose"/> enables detailed performance diagnostics for decoding steps,
+        /// which can be useful for debugging but may add overhead.
+        /// </para>
+        /// </summary>
+        /// <param name="minLevel">The minimum log level to set.</param>
+        /// <returns>An <see cref="QrcodeResults.ErrorCode"/> indicating success (OK) or a failure code.</returns>
+        public static QrcodeResults.ErrorCode SetMinimumLogLevel(LogLevel minLevel)
+        {
+            int err = Bridge.SetLogLevel((int)minLevel);
+            return (QrcodeResults.ErrorCode)err;
+        }
+
+        /// <summary>
         /// Represents the method that will handle the <see cref="OnLogMessage"/> and
         /// <see cref="OnLogMessageMainThread"/> events.
         /// </summary>
