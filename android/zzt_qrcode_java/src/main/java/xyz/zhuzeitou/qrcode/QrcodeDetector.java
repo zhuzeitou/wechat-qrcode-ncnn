@@ -204,7 +204,7 @@ public class QrcodeDetector implements AutoCloseable {
                     Log.i("zzt", "detectQRCode bitmap read colors");
                     int[] pixels = new int[image.getWidth() * image.getHeight()];
                     image.getPixels(pixels, 0, image.getWidth(), 0, 0, image.getWidth(), image.getHeight());
-                    PixelFormat format = PixelFormat.ARGB;
+                    PixelFormat format = PixelFormat.BGRA;
                     Log.i("zzt", "detectQRCode bitmap read done");
                     result = NativeLib.detectAndDecodePixels(nativeDetector, pixels, format.ordinal(), image.getWidth(), image.getHeight(), 0);
                     error = NativeLib.getLastError();

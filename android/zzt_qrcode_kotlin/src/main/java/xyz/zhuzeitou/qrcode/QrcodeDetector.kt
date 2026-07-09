@@ -230,7 +230,7 @@ class QrcodeDetector : AutoCloseable {
                     image.getPixels(
                         pixels, 0, image.getWidth(), 0, 0, image.getWidth(), image.getHeight()
                     )
-                    val format = PixelFormat.ARGB
+                    val format = PixelFormat.BGRA
                     Log.i("zzt", "detectQRCode bitmap read done")
                     result = NativeLib.detectAndDecodePixels(
                         nativeDetector,
