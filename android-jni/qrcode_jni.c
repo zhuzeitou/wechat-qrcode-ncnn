@@ -2,17 +2,40 @@
 #include <malloc.h>
 #include <string.h>
 #include <threads.h>
+#include <limits.h>
 
 #include "zzt_qrcode/qrcode.h"
 
 static thread_local zzt_qrcode_error_t last_error = ZZT_QRCODE_OK;
 
-/* Log dispatch bridge state */
+/* Runtime log sink bridge state.  The native sink exists only while either
+ * managed listener list is non-empty. */
+typedef struct {
+    uint64_t generation;
+    int destroyed;
+} NativeLogSinkLifetime;
+
 static mtx_t g_log_mutex;
+static cnd_t g_log_cv;
 static int g_log_mutex_initialized = 0;
 static JavaVM *g_jvm = NULL;
 static jclass g_log_class = NULL;
 static jmethodID g_log_method = NULL;
+static zzt_qrcode_log_sink_id_t g_log_sink_id = 0;
+static NativeLogSinkLifetime *g_log_lifetime = NULL;
+static uint64_t g_desired_generation = 0;
+static uint64_t g_applied_generation = 0;
+static uint64_t g_transition_token = 0;
+static uint64_t g_lifetime_generation = 0;
+static int g_desired_enabled = 0;
+static int g_actual_enabled = 0;
+static int32_t g_desired_level = ZZT_QRCODE_LOG_LEVEL_WARN;
+static int32_t g_actual_level = ZZT_QRCODE_LOG_LEVEL_WARN;
+static int g_transitioning = 0;
+static int g_transition_destroy_owns_completion = 0;
+static int g_unloading = 0;
+static zzt_qrcode_error_t g_log_error = ZZT_QRCODE_OK;
+static thread_local int g_inside_log_callback = 0;
 static const jchar empty_jchar[] = {0};
 
 /**
@@ -107,10 +130,6 @@ static int utf8_to_utf16(const char8_t *src, int src_len, char16_t *dst, int dst
     return out;
 }
 
-jint zzt_qrcode_set_log_level_jni(JNIEnv *env, jclass clazz, jint level) {
-    last_error = zzt_qrcode_set_log_level((zzt_qrcode_log_level_t) level);
-    return (jint) last_error;
-}
 
 jint zzt_qrcode_get_last_error_jni(JNIEnv *env, jclass clazz) {
     return (jint) last_error;
@@ -352,205 +371,267 @@ zzt_qrcode_get_result_points_jni(JNIEnv *env, jclass clazz, jlong native_result,
     return points_array;
 }
 
-/**
- * Native callback registered with zzt_qrcode_set_log_callback.
- * Dispatches to the fixed static method NativeLib.dispatchLog(int, String).
- * Handles thread attachment for arbitrary native threads and clears Java exceptions.
- */
-static void native_log_callback(zzt_qrcode_log_level_t level, const char *message) {
-    if (!g_log_mutex_initialized) {
-        return;
+/* The core owns a lifetime only after add succeeds.  Destruction is its
+ * quiescence acknowledgement; it is deliberately separate from registration. */
+static void ZZT_QRCODE_CALLBACK native_log_sink_destroy(void *user_data) {
+    NativeLogSinkLifetime *lifetime = (NativeLogSinkLifetime *) user_data;
+    int destroy_owned = 0;
+    if (lifetime == NULL || !g_log_mutex_initialized) return;
+    mtx_lock(&g_log_mutex);
+    lifetime->destroyed = 1;
+    if (g_transitioning && g_log_lifetime == lifetime &&
+        g_transition_destroy_owns_completion) {
+        g_actual_enabled = 0;
+        g_log_sink_id = 0;
+        g_log_lifetime = NULL;
+        g_applied_generation = g_desired_generation;
+        g_transitioning = 0;
+        g_transition_destroy_owns_completion = 0;
+        destroy_owned = 1;
+        cnd_broadcast(&g_log_cv);
     }
+    cnd_broadcast(&g_log_cv);
+    mtx_unlock(&g_log_mutex);
+    if (destroy_owned) free(lifetime);
+}
 
+static void ZZT_QRCODE_CALLBACK native_log_callback(
+        const zzt_qrcode_log_event_t *event, void *user_data) {
+    (void) user_data;
+    if (!g_log_mutex_initialized || event == NULL || event->message == NULL ||
+        event->message_len > INT32_MAX) return;
     mtx_lock(&g_log_mutex);
     JavaVM *jvm = g_jvm;
     mtx_unlock(&g_log_mutex);
-
-    if (jvm == NULL) {
-        return;
-    }
+    if (jvm == NULL) return;
 
     JNIEnv *env = NULL;
     jint get_env_err = (*jvm)->GetEnv(jvm, (void **) &env, JNI_VERSION_1_6);
     jboolean did_attach = JNI_FALSE;
-
     if (get_env_err == JNI_EDETACHED) {
-        if ((*jvm)->AttachCurrentThread(jvm, &env, NULL) != JNI_OK || env == NULL) {
-            return;
-        }
+        if ((*jvm)->AttachCurrentThread(jvm, &env, NULL) != JNI_OK || env == NULL) return;
         did_attach = JNI_TRUE;
-    } else if (get_env_err != JNI_OK || env == NULL) {
-        return;
-    }
+    } else if (get_env_err != JNI_OK || env == NULL) return;
 
     mtx_lock(&g_log_mutex);
     jclass log_class = g_log_class == NULL ? NULL : (jclass) (*env)->NewLocalRef(env, g_log_class);
     jmethodID log_method = g_log_method;
     mtx_unlock(&g_log_mutex);
-
     if (log_class == NULL || log_method == NULL) {
-        if ((*env)->ExceptionCheck(env)) {
-            (*env)->ExceptionClear(env);
-        }
-        if (did_attach) {
-            (*jvm)->DetachCurrentThread(jvm);
-        }
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        if (did_attach) (*jvm)->DetachCurrentThread(jvm);
         return;
     }
 
-    jstring msg_jstr = NULL;
-    int skip_dispatch = 0;
-
-    /* Convert message: NULL or empty -> empty string */
-    if (message != NULL && message[0] != '\0') {
-        int msg_len = (int) strlen(message);
-        int msg_buf_len = msg_len + 1;
-        char16_t *msg_u16 = (char16_t *) malloc(sizeof(char16_t) * msg_buf_len);
-        if (msg_u16 != NULL) {
-            int msg_u16_len = utf8_to_utf16((const char8_t *) message, msg_len, msg_u16, msg_buf_len);
-            msg_jstr = (msg_u16_len > 0)
-                       ? (*env)->NewString(env, (const jchar *) msg_u16, msg_u16_len)
-                       : (*env)->NewString(env, empty_jchar, 0);
-            free(msg_u16);
-        } else {
-            skip_dispatch = 1;
-        }
-    } else {
-        msg_jstr = (*env)->NewString(env, empty_jchar, 0);
+    const int message_len = (int) event->message_len;
+    char16_t *message_u16 = NULL;
+    jstring message = NULL;
+    if (message_len == 0) {
+        message = (*env)->NewString(env, empty_jchar, 0);
+    } else if ((message_u16 = malloc(sizeof(char16_t) * (size_t) (message_len + 1))) != NULL) {
+        int u16_len = utf8_to_utf16((const char8_t *) event->message, message_len,
+                                    message_u16, message_len + 1);
+        message = (*env)->NewString(env, (const jchar *) message_u16, u16_len);
     }
-
-    if (!skip_dispatch && msg_jstr != NULL) {
-        (*env)->CallStaticVoidMethod(env, log_class, log_method, (jint) level, msg_jstr);
+    if (message != NULL) {
+        ++g_inside_log_callback;
+        (*env)->CallStaticVoidMethod(env, log_class, log_method, (jint) event->level, message);
+        --g_inside_log_callback;
     }
-
-    /* Clear any Java exception thrown by string creation or dispatch; logging must never affect QR behavior. */
-    if ((*env)->ExceptionCheck(env)) {
-        (*env)->ExceptionClear(env);
-    }
-
-    if (msg_jstr != NULL) {
-        (*env)->DeleteLocalRef(env, msg_jstr);
-    }
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    free(message_u16);
+    if (message != NULL) (*env)->DeleteLocalRef(env, message);
     (*env)->DeleteLocalRef(env, log_class);
+    if (did_attach) (*jvm)->DetachCurrentThread(jvm);
+}
 
-    if (did_attach) {
-        (*jvm)->DetachCurrentThread(jvm);
+/* Exactly one caller owns a transition.  Native calls run with the mutex
+ * released; stale calls can therefore never commit a newer desired generation. */
+static zzt_qrcode_error_t reconcile_log_sink(int enabled, int32_t level) {
+    if (!g_log_mutex_initialized) return ZZT_QRCODE_ERROR_INTERNAL;
+    mtx_lock(&g_log_mutex);
+    if (enabled != g_desired_enabled || level != g_desired_level) {
+        g_desired_enabled = enabled;
+        g_desired_level = level;
+        ++g_desired_generation;
     }
+    if (level < ZZT_QRCODE_LOG_LEVEL_VERBOSE || level > ZZT_QRCODE_LOG_LEVEL_ERROR) {
+        g_log_error = ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
+        mtx_unlock(&g_log_mutex);
+        return g_log_error;
+    }
+    if (g_inside_log_callback) {
+        mtx_unlock(&g_log_mutex);
+        return ZZT_QRCODE_OK;
+    }
+    while (g_transitioning) cnd_wait(&g_log_cv, &g_log_mutex);
+    if (g_actual_enabled == g_desired_enabled &&
+        (!g_actual_enabled || g_actual_level == g_desired_level)) {
+        zzt_qrcode_error_t result = g_log_error;
+        mtx_unlock(&g_log_mutex);
+        return result;
+    }
+
+    const uint64_t token = ++g_transition_token;
+    const uint64_t generation = g_desired_generation;
+    const int target_enabled = g_desired_enabled;
+    const int32_t target_level = g_desired_level;
+    const zzt_qrcode_log_sink_id_t old_sink_id = g_log_sink_id;
+    NativeLogSinkLifetime *lifetime = NULL;
+    int remove = 0, update = 0;
+    g_transitioning = 1;
+    g_transition_destroy_owns_completion = 0;
+    if (target_enabled && !g_actual_enabled) {
+        lifetime = calloc(1, sizeof(*lifetime));
+        if (lifetime == NULL) {
+            g_transitioning = 0;
+            g_log_error = ZZT_QRCODE_ERROR_OUT_OF_MEMORY;
+            cnd_broadcast(&g_log_cv);
+            mtx_unlock(&g_log_mutex);
+            return g_log_error;
+        }
+        lifetime->generation = ++g_lifetime_generation;
+    } else if (!target_enabled && g_actual_enabled) {
+        remove = 1;
+        lifetime = g_log_lifetime;
+        g_transition_destroy_owns_completion = 0;
+    } else {
+        update = 1;
+    }
+    mtx_unlock(&g_log_mutex);
+
+    zzt_qrcode_error_t error;
+    zzt_qrcode_log_sink_id_t new_sink_id = 0;
+    if (lifetime != NULL && !remove) {
+        zzt_qrcode_log_sink_options_t options = ZZT_QRCODE_LOG_SINK_OPTIONS_INIT;
+        options.callback = native_log_callback;
+        options.user_data = lifetime;
+        options.destroy_user_data = native_log_sink_destroy;
+        options.min_level = target_level;
+        error = zzt_qrcode_add_runtime_log_sink(&options, &new_sink_id);
+    } else if (remove) {
+        error = zzt_qrcode_remove_runtime_log_sink(old_sink_id);
+    } else if (update) {
+        error = zzt_qrcode_set_runtime_log_sink_level(old_sink_id, target_level);
+    } else {
+        error = ZZT_QRCODE_ERROR_INTERNAL;
+    }
+
+    mtx_lock(&g_log_mutex);
+    if (!g_transitioning || token != g_transition_token || generation != g_desired_generation) {
+        const int remove_new_sink = lifetime != NULL && !remove &&
+                                    error == ZZT_QRCODE_OK && new_sink_id != 0;
+        mtx_unlock(&g_log_mutex);
+        if (remove_new_sink) (void) zzt_qrcode_remove_runtime_log_sink(new_sink_id);
+        mtx_lock(&g_log_mutex);
+        if (remove && error == ZZT_QRCODE_OK && lifetime != NULL && lifetime->destroyed) {
+            free(lifetime);
+            g_log_lifetime = NULL;
+            g_log_sink_id = 0;
+            g_actual_enabled = 0;
+        } else if (lifetime != NULL && !remove) {
+            free(lifetime);
+        }
+        if (g_transitioning && token == g_transition_token) {
+            g_transitioning = 0;
+            g_transition_destroy_owns_completion = 0;
+            cnd_broadcast(&g_log_cv);
+        }
+        mtx_unlock(&g_log_mutex);
+        return error;
+    }
+    if (error == ZZT_QRCODE_OK) {
+        if (remove) {
+            if (lifetime == NULL || !lifetime->destroyed) {
+                error = ZZT_QRCODE_ERROR_INTERNAL;
+            } else {
+                free(lifetime);
+                g_log_lifetime = NULL;
+                g_log_sink_id = 0;
+                g_actual_enabled = 0;
+            }
+        } else if (update) {
+            g_actual_level = target_level;
+        } else {
+            g_log_lifetime = lifetime;
+            g_log_sink_id = new_sink_id;
+            g_actual_enabled = 1;
+            g_actual_level = target_level;
+        }
+    }
+    if (error != ZZT_QRCODE_OK && lifetime != NULL && !remove) free(lifetime);
+    g_log_error = error;
+    g_applied_generation = generation;
+    g_transitioning = 0;
+    g_transition_destroy_owns_completion = 0;
+    cnd_broadcast(&g_log_cv);
+    mtx_unlock(&g_log_mutex);
+    return error;
+}
+
+jint zzt_qrcode_configure_log_sink_jni(JNIEnv *env, jclass clazz, jboolean enabled, jint level) {
+    (void) env; (void) clazz;
+    last_error = reconcile_log_sink(enabled == JNI_TRUE, (int32_t) level);
+    return (jint) last_error;
 }
 
 jint JNI_OnLoad(JavaVM *vm, void *reserved) {
+    (void) reserved;
     JNIEnv *env = NULL;
-    jint ret = (*vm)->GetEnv(vm, (void **) &env, JNI_VERSION_1_6);
-    if (ret != JNI_OK) {
-        return JNI_ERR;
-    }
+    if ((*vm)->GetEnv(vm, (void **) &env, JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;
     jclass cls = (*env)->FindClass(env, "xyz/zhuzeitou/qrcode/NativeLib");
-    if (cls == NULL) {
-        return JNI_ERR;
-    }
-
-    if (!g_log_mutex_initialized && mtx_init(&g_log_mutex, mtx_plain) != thrd_success) {
+    if (cls == NULL) return JNI_ERR;
+    if (!g_log_mutex_initialized &&
+        (mtx_init(&g_log_mutex, mtx_plain) != thrd_success ||
+         cnd_init(&g_log_cv) != thrd_success)) {
         (*env)->DeleteLocalRef(env, cls);
         return JNI_ERR;
     }
     g_log_mutex_initialized = 1;
-
-    /* Cache JVM, global class reference, and method ID for log dispatch */
     mtx_lock(&g_log_mutex);
     g_jvm = vm;
     g_log_class = (jclass) (*env)->NewGlobalRef(env, cls);
-    if (g_log_class != NULL) {
-        g_log_method = (*env)->GetStaticMethodID(env, g_log_class,
-                                                  "dispatchLog",
-                                                  "(ILjava/lang/String;)V");
-    }
+    if (g_log_class != NULL)
+        g_log_method = (*env)->GetStaticMethodID(env, g_log_class, "dispatchLog", "(ILjava/lang/String;)V");
     mtx_unlock(&g_log_mutex);
-
     if (g_log_class == NULL || g_log_method == NULL) {
-        if ((*env)->ExceptionCheck(env)) {
-            (*env)->ExceptionClear(env);
-        }
-        if (g_log_class != NULL) {
-            (*env)->DeleteGlobalRef(env, g_log_class);
-        }
-        g_jvm = NULL;
-        g_log_class = NULL;
-        g_log_method = NULL;
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         (*env)->DeleteLocalRef(env, cls);
-        mtx_destroy(&g_log_mutex);
-        g_log_mutex_initialized = 0;
         return JNI_ERR;
     }
     JNINativeMethod methods[] = {
-            {"createDetector",        "()J",                    (void *) zzt_qrcode_create_detector_jni},
-            {"releaseDetector",       "(J)V",                   (void *) zzt_qrcode_release_detector_jni},
-            {"detectAndDecodePath",   "(JLjava/lang/String;)J", (void *) zzt_qrcode_detect_and_decode_path_jni},
-            {"detectAndDecodeData",   "(J[B)J",                 (void *) zzt_qrcode_detect_and_decode_data_jni},
-            {"detectAndDecodePixels", "(J[BIIII)J",             (void *) zzt_qrcode_detect_and_decode_pixels_byte_jni},
-            {"detectAndDecodePixels", "(J[IIIII)J",             (void *) zzt_qrcode_detect_and_decode_pixels_int_jni},
-            {"releaseResult",         "(J)V",                   (void *) zzt_qrcode_release_result_jni},
-            {"getResultSize",         "(J)I",                   (void *) zzt_qrcode_get_result_size_jni},
-            {"getResultText",         "(JI)Ljava/lang/String;", (void *) zzt_qrcode_get_result_text_jni},
-            {"getResultPoints",       "(JI)[[F",                (void *) zzt_qrcode_get_result_points_jni},
-            {"getLastError",          "()I",                    (void *) zzt_qrcode_get_last_error_jni},
-            {"setLogLevel",           "(I)I",                   (void *) zzt_qrcode_set_log_level_jni},
+            {"createDetector", "()J", (void *) zzt_qrcode_create_detector_jni},
+            {"releaseDetector", "(J)V", (void *) zzt_qrcode_release_detector_jni},
+            {"detectAndDecodePath", "(JLjava/lang/String;)J", (void *) zzt_qrcode_detect_and_decode_path_jni},
+            {"detectAndDecodeData", "(J[B)J", (void *) zzt_qrcode_detect_and_decode_data_jni},
+            {"detectAndDecodePixels", "(J[BIIII)J", (void *) zzt_qrcode_detect_and_decode_pixels_byte_jni},
+            {"detectAndDecodePixels", "(J[IIIII)J", (void *) zzt_qrcode_detect_and_decode_pixels_int_jni},
+            {"releaseResult", "(J)V", (void *) zzt_qrcode_release_result_jni},
+            {"getResultSize", "(J)I", (void *) zzt_qrcode_get_result_size_jni},
+            {"getResultText", "(JI)Ljava/lang/String;", (void *) zzt_qrcode_get_result_text_jni},
+            {"getResultPoints", "(JI)[[F", (void *) zzt_qrcode_get_result_points_jni},
+            {"getLastError", "()I", (void *) zzt_qrcode_get_last_error_jni},
+            {"configureLogSink", "(ZI)I", (void *) zzt_qrcode_configure_log_sink_jni},
     };
-    ret = (*env)->RegisterNatives(env, cls, methods, sizeof(methods) / sizeof(methods[0]));
+    jint result = (*env)->RegisterNatives(env, cls, methods, sizeof(methods) / sizeof(methods[0]));
     (*env)->DeleteLocalRef(env, cls);
-    if (ret != JNI_OK) {
-        if ((*env)->ExceptionCheck(env)) {
-            (*env)->ExceptionClear(env);
-        }
-        if (g_log_class != NULL) {
-            (*env)->DeleteGlobalRef(env, g_log_class);
-        }
-        g_jvm = NULL;
-        g_log_class = NULL;
-        g_log_method = NULL;
-        mtx_destroy(&g_log_mutex);
-        g_log_mutex_initialized = 0;
-        return JNI_ERR;
-    }
-
-    zzt_qrcode_error_t log_callback_error = zzt_qrcode_set_log_callback(native_log_callback);
-    if (log_callback_error != ZZT_QRCODE_OK) {
-        if (g_log_class != NULL) {
-            (*env)->DeleteGlobalRef(env, g_log_class);
-        }
-        g_jvm = NULL;
-        g_log_class = NULL;
-        g_log_method = NULL;
-        mtx_destroy(&g_log_mutex);
-        g_log_mutex_initialized = 0;
-        return JNI_ERR;
-    }
-    return JNI_VERSION_1_6;
+    return result == JNI_OK ? JNI_VERSION_1_6 : JNI_ERR;
 }
 
 void JNI_OnUnload(JavaVM *vm, void *reserved) {
-    /* Clear the C log callback so no further dispatches arrive during teardown */
-    zzt_qrcode_set_log_callback(NULL);
-
-    if (!g_log_mutex_initialized) {
-        return;
-    }
-
-    JNIEnv *env = NULL;
-    jclass log_class = NULL;
+    (void) reserved;
+    if (!g_log_mutex_initialized) return;
     mtx_lock(&g_log_mutex);
-    if ((*vm)->GetEnv(vm, (void **) &env, JNI_VERSION_1_6) == JNI_OK && env != NULL) {
-        log_class = g_log_class;
-    }
+    g_unloading = 1;
+    mtx_unlock(&g_log_mutex);
+    (void) reconcile_log_sink(0, ZZT_QRCODE_LOG_LEVEL_WARN);
+    JNIEnv *env = NULL;
+    mtx_lock(&g_log_mutex);
+    jclass log_class = g_log_class;
     g_jvm = NULL;
     g_log_class = NULL;
     g_log_method = NULL;
     mtx_unlock(&g_log_mutex);
-
-    /* Release the global class reference after it is no longer reachable from callbacks. */
-    if (env != NULL && log_class != NULL) {
+    if ((*vm)->GetEnv(vm, (void **) &env, JNI_VERSION_1_6) == JNI_OK && env != NULL && log_class != NULL)
         (*env)->DeleteGlobalRef(env, log_class);
-    }
-
-    /* Do not destroy g_log_mutex here: an in-flight callback may still be unwinding after
-     * zzt_qrcode_set_log_callback(NULL). Keeping the mutex initialized avoids a teardown race. */
 }

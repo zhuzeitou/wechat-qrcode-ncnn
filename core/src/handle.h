@@ -3,9 +3,11 @@
 
 #include <atomic>
 #include <chrono>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
+#include <stdexcept>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -36,21 +38,27 @@ public:
     static handle_t create_handle(Args&&... args) {
         auto ptr = std::make_shared<T>(std::forward<Args>(args)...);
 
-        while (true) {
-            key_t index = generate_handle();
-            if (index != 0) {
-                std::unique_lock g(mutex());
-                auto [it, success] = handle_map().try_emplace(index, std::move(ptr));
-                if (success) {
-                    return traits::from_key(index);
-                }
-            }
+        const key_t index = generate_handle();
+        std::unique_lock g(mutex());
+        auto [it, success] = handle_map().try_emplace(index, std::move(ptr));
+        if (!success) {
+            throw std::runtime_error("handle collision");
         }
+        return traits::from_key(index);
     }
 
     static bool release_handle(handle_t handle) {
-        std::unique_lock g(mutex());
-        return handle_map().erase(traits::to_key(handle)) > 0;
+        std::shared_ptr<T> released;
+        {
+            std::unique_lock g(mutex());
+            auto it = handle_map().find(traits::to_key(handle));
+            if (it == handle_map().end()) {
+                return false;
+            }
+            released = std::move(it->second);
+            handle_map().erase(it);
+        }
+        return true;
     }
 
     static std::shared_ptr<T> get(handle_t handle) {
@@ -83,14 +91,19 @@ private:
         constexpr int S2 = is64 ? 27 : 13;
         constexpr int S3 = is64 ? 31 : 16;
 
-        while (true) {
-            key_t x = ++counter;
-
+        key_t current = counter.load(std::memory_order_relaxed);
+        for (;;) {
+            if (current == std::numeric_limits<key_t>::max()) {
+                throw std::overflow_error("handle ID exhausted");
+            }
+            if (!counter.compare_exchange_weak(current, current + 1, std::memory_order_relaxed)) {
+                continue;
+            }
+            key_t x = current + 1;
             // SplitMix-style bijective permutation
             x = (x ^ (x >> S1)) * M1;
             x = (x ^ (x >> S2)) * M2;
             x = x ^ (x >> S3);
-
             key_t handle = x ^ seed;
             if (handle != 0) return handle;
         }

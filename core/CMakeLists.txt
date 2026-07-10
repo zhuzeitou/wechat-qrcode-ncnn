@@ -35,6 +35,7 @@ file(GLOB_RECURSE wechat_qrcode_srcs src/wechat_qrcode/src/*.cpp)
 
 add_library(zzt_qrcode SHARED
         src/qrcode.cpp
+        src/logger.cpp
         src/qrcode_result.cpp
         ${wechat_qrcode_srcs}
 )

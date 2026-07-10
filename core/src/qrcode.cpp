@@ -14,6 +14,7 @@
 #include <new>
 
 #include "handle.h"
+#include "logger.h"
 #include "mat.h"
 #include "opencv2/wechat_qrcode.hpp"
 #include "qrcode_result.h"
@@ -21,52 +22,35 @@
 
 namespace {
 
-std::mutex g_log_callback_mutex;
-zzt_qrcode_log_callback_t g_log_callback = nullptr;
-std::atomic<int> g_min_log_level{ZZT_QRCODE_LOG_LEVEL_WARN};
-std::atomic<bool> g_log_callback_installed{false};
+thread_local zzt::qrcode::LogContext g_log_context{};
+thread_local const char* g_log_operation = "";
+struct LogContextScope {
+    zzt::qrcode::LogContext saved;
+    const char* saved_operation;
+    explicit LogContextScope(zzt::qrcode::LogContext value, const char* operation = "")
+        : saved(std::move(g_log_context)), saved_operation(g_log_operation) {
+        g_log_context = std::move(value);
+        g_log_operation = operation;
+    }
+    ~LogContextScope() { g_log_context = std::move(saved); g_log_operation = saved_operation; }
+};
 
 bool can_log(zzt_qrcode_log_level_t level) {
-    return g_log_callback_installed.load(std::memory_order_acquire) &&
-           (static_cast<int>(level) >= g_min_log_level.load(std::memory_order_relaxed));
+    return zzt::qrcode::can_log(g_log_context, level);
 }
 
 void dispatch_log(zzt_qrcode_log_level_t level, const std::string& message) {
-    if (!can_log(level)) {
-        return;
-    }
-    try {
-        zzt_qrcode_log_callback_t callback = nullptr;
-        {
-            std::lock_guard<std::mutex> lock(g_log_callback_mutex);
-            callback = g_log_callback;
-        }
-
-        if (callback == nullptr) {
-            return;
-        }
-
-        callback(level, message.c_str());
-    } catch (...) {
-        // Logging must never change C API behavior.
-    }
+    zzt::qrcode::dispatch_log(g_log_context, g_log_operation, level, ZZT_QRCODE_OK, message);
 }
 
 struct TimingGate {
     bool enabled;
     std::chrono::steady_clock::time_point start;
-
-    TimingGate(zzt_qrcode_log_level_t level) {
-        enabled = can_log(level);
-        if (enabled) {
-            start = std::chrono::steady_clock::now();
-        }
+    TimingGate(zzt_qrcode_log_level_t level) : enabled(can_log(level)) {
+        if (enabled) start = std::chrono::steady_clock::now();
     }
-
     double elapsed_ms() const {
-        if (!enabled) return 0.0;
-        auto end = std::chrono::steady_clock::now();
-        return std::chrono::duration<double, std::milli>(end - start).count();
+        return enabled ? std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() : 0.0;
     }
 };
 
@@ -74,25 +58,14 @@ struct TotalDurationLogger {
     const char* fn;
     bool enabled;
     std::chrono::steady_clock::time_point start;
-
-    TotalDurationLogger(const char* func, zzt_qrcode_log_level_t level) : fn(func) {
-        enabled = can_log(level);
-        if (enabled) {
-            start = std::chrono::steady_clock::now();
-        }
+    TotalDurationLogger(const char* func, zzt_qrcode_log_level_t level) : fn(func), enabled(can_log(level)) {
+        if (enabled) start = std::chrono::steady_clock::now();
     }
-
     ~TotalDurationLogger() {
-        if (enabled) {
-            try {
-                auto end = std::chrono::steady_clock::now();
-                double elapsed = std::chrono::duration<double, std::milli>(end - start).count();
-                dispatch_log(ZZT_QRCODE_LOG_LEVEL_VERBOSE,
-                             std::string(fn) + ": total duration: " + std::to_string(elapsed) + " ms");
-            } catch (...) {
-                // Destructors must not throw exceptions
-            }
-        }
+        if (enabled) try {
+            zzt::qrcode::dispatch_log(g_log_context, fn, ZZT_QRCODE_LOG_LEVEL_VERBOSE, ZZT_QRCODE_OK,
+                std::string(fn) + ": total duration: " + std::to_string(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count()) + " ms");
+        } catch (...) {}
     }
 };
 
@@ -100,83 +73,24 @@ static bool is_path_decode_function(const char* fn) {
     return std::strcmp(fn, "zzt_qrcode_detect_and_decode_path_u8") == 0 ||
            std::strcmp(fn, "zzt_qrcode_detect_and_decode_path_u16") == 0;
 }
-
 static void log_exception(const char* fn, const std::exception& e) {
-    if (!can_log(ZZT_QRCODE_LOG_LEVEL_ERROR)) {
-        return;
-    }
-    try {
-        if (is_path_decode_function(fn)) {
-            dispatch_log(ZZT_QRCODE_LOG_LEVEL_ERROR, std::string("Exception in ") + fn);
-            return;
-        }
-        dispatch_log(ZZT_QRCODE_LOG_LEVEL_ERROR, std::string("Exception in ") + fn + ": " + e.what());
-    } catch (...) {
-        // Logging must never change C API behavior.
-    }
+    try { zzt::qrcode::dispatch_log(g_log_context, fn, ZZT_QRCODE_LOG_LEVEL_ERROR,
+          dynamic_cast<const std::bad_alloc*>(&e) ? ZZT_QRCODE_ERROR_OUT_OF_MEMORY : ZZT_QRCODE_ERROR_INTERNAL,
+          is_path_decode_function(fn) ? std::string("Exception in ") + fn : std::string("Exception in ") + fn + ": " + e.what()); } catch (...) {}
 }
-
-static void log_unknown(const char* fn) {
-    if (!can_log(ZZT_QRCODE_LOG_LEVEL_ERROR)) {
-        return;
-    }
-    try {
-        dispatch_log(ZZT_QRCODE_LOG_LEVEL_ERROR, std::string("Unknown exception in ") + fn);
-    } catch (...) {
-        // Logging must never change C API behavior.
-    }
+static void log_unknown(const char* fn) { try { zzt::qrcode::dispatch_log(g_log_context, fn, ZZT_QRCODE_LOG_LEVEL_ERROR, ZZT_QRCODE_ERROR_INTERNAL, std::string("Unknown exception in ") + fn); } catch (...) {} }
+static void log_warn_int(const char* fn, const char* reason, const char* name, int value) { try { zzt::qrcode::dispatch_log(g_log_context, fn, ZZT_QRCODE_LOG_LEVEL_WARN, ZZT_QRCODE_ERROR_INVALID_ARGUMENT, std::string("Warning in ") + fn + ": " + reason + " (" + name + "=" + std::to_string(value) + ")"); } catch (...) {} }
+static void log_warn_pixels(const char* fn, const char* reason, zzt_qrcode_pixel_format_t format, int width, int height, int stride) {
+    try { zzt::qrcode::dispatch_log(g_log_context, fn, ZZT_QRCODE_LOG_LEVEL_WARN, ZZT_QRCODE_ERROR_INVALID_ARGUMENT,
+        std::string("Warning in ") + fn + ": " + reason + " (format=" + std::to_string(static_cast<int>(format)) +
+        ", width=" + std::to_string(width) + ", height=" + std::to_string(height) + ", stride=" + std::to_string(stride) + ")"); } catch (...) {}
 }
-
 static void log_warn(const char* fn, const char* reason) {
-    if (!can_log(ZZT_QRCODE_LOG_LEVEL_WARN)) {
-        return;
-    }
-    try {
-        dispatch_log(ZZT_QRCODE_LOG_LEVEL_WARN, std::string("Warning in ") + fn + ": " + reason);
-    } catch (...) {
-        // Logging must never change C API behavior.
-    }
+    zzt_qrcode_error_t error = std::strstr(reason, "handle") ? ZZT_QRCODE_ERROR_INVALID_HANDLE :
+        (std::strstr(reason, "decode failed") ? ZZT_QRCODE_ERROR_DECODE_FAILED : ZZT_QRCODE_ERROR_INVALID_ARGUMENT);
+    try { zzt::qrcode::dispatch_log(g_log_context, fn, ZZT_QRCODE_LOG_LEVEL_WARN, error, std::string("Warning in ") + fn + ": " + reason); } catch (...) {}
 }
-
-static void log_warn_int(const char* fn, const char* reason, const char* name, int value) {
-    if (!can_log(ZZT_QRCODE_LOG_LEVEL_WARN)) {
-        return;
-    }
-    try {
-        dispatch_log(ZZT_QRCODE_LOG_LEVEL_WARN,
-                     std::string("Warning in ") + fn + ": " + reason + " (" + name + "=" + std::to_string(value) + ")");
-    } catch (...) {
-        // Logging must never change C API behavior.
-    }
-}
-
-static void log_warn_pixels(const char* fn, const char* reason, zzt_qrcode_pixel_format_t format, int width, int height,
-                            int stride) {
-    if (!can_log(ZZT_QRCODE_LOG_LEVEL_WARN)) {
-        return;
-    }
-    try {
-        dispatch_log(ZZT_QRCODE_LOG_LEVEL_WARN,
-                     std::string("Warning in ") + fn + ": " + reason + " (format=" +
-                             std::to_string(static_cast<int>(format)) + ", width=" + std::to_string(width) +
-                             ", height=" + std::to_string(height) + ", stride=" + std::to_string(stride) + ")");
-    } catch (...) {
-        // Logging must never change C API behavior.
-    }
-}
-
-static void log_warn_index(const char* fn, int index, size_t count) {
-    if (!can_log(ZZT_QRCODE_LOG_LEVEL_WARN)) {
-        return;
-    }
-    try {
-        dispatch_log(ZZT_QRCODE_LOG_LEVEL_WARN,
-                     std::string("Warning in ") + fn + ": invalid result index (index=" + std::to_string(index) +
-                             ", count=" + std::to_string(count) + ")");
-    } catch (...) {
-        // Logging must never change C API behavior.
-    }
-}
+static void log_warn_index(const char* fn, int index, size_t count) { try { zzt::qrcode::dispatch_log(g_log_context, fn, ZZT_QRCODE_LOG_LEVEL_WARN, ZZT_QRCODE_ERROR_INVALID_INDEX, std::string("Warning in ") + fn + ": invalid result index (index=" + std::to_string(index) + ", count=" + std::to_string(count) + ")"); } catch (...) {} }
 
 static int bytes_per_pixel(zzt_qrcode_pixel_format_t format) {
     switch (format) {
@@ -213,50 +127,76 @@ static zzt_qrcode_error_t catch_exceptions(const char* fn, F&& body) {
     }
 }
 
-struct WeChatQRCode : cv::wechat_qrcode::WeChatQRCode, zzt::qrcode::Handle<WeChatQRCode, zzt_qrcode_detector_h> {};
+struct WeChatQRCode : cv::wechat_qrcode::WeChatQRCode, zzt::qrcode::Handle<WeChatQRCode, zzt_qrcode_detector_h> {
+    zzt::qrcode::LogRoute route;
+    uint64_t detector_id;
+    explicit WeChatQRCode(zzt::qrcode::LogRoute value = {}) : route(std::move(value)), detector_id(zzt::qrcode::generate_object_id()) {}
+};
 struct QrcodeResultList : std::vector<std::shared_ptr<zzt::qrcode::QrcodeResult>>,
-                          zzt::qrcode::Handle<QrcodeResultList, zzt_qrcode_result_h> {};
-
-zzt_qrcode_error_t zzt_qrcode_set_log_callback(zzt_qrcode_log_callback_t callback) {
-    try {
-        std::lock_guard<std::mutex> lock(g_log_callback_mutex);
-        g_log_callback = callback;
-        g_log_callback_installed.store(callback != nullptr, std::memory_order_release);
-        return ZZT_QRCODE_OK;
-    } catch (const std::exception& e) {
-        log_exception("zzt_qrcode_set_log_callback", e);
-        return ZZT_QRCODE_ERROR_INTERNAL;
-    } catch (...) {
-        log_unknown("zzt_qrcode_set_log_callback");
-        return ZZT_QRCODE_ERROR_INTERNAL;
-    }
+                          zzt::qrcode::Handle<QrcodeResultList, zzt_qrcode_result_h> {
+    zzt::qrcode::LogRoute route;
+    uint64_t detector_id = 0;
+    uint64_t result_id;
+    QrcodeResultList() : result_id(zzt::qrcode::generate_object_id()) {}
+    QrcodeResultList(const std::vector<std::shared_ptr<zzt::qrcode::QrcodeResult>>& values,
+                     zzt::qrcode::LogRoute value, uint64_t detector)
+        : std::vector<std::shared_ptr<zzt::qrcode::QrcodeResult>>(values), route(std::move(value)),
+          detector_id(detector), result_id(zzt::qrcode::generate_object_id()) {}
+};
+zzt::qrcode::LogContext detector_context(zzt_qrcode_detector_h detector) {
+    auto value = WeChatQRCode::get(detector);
+    return value ? zzt::qrcode::LogContext{value->route, value->detector_id, 0} : zzt::qrcode::LogContext{};
+}
+zzt::qrcode::LogContext result_context(zzt_qrcode_result_h result) {
+    auto value = QrcodeResultList::get(result);
+    return value ? zzt::qrcode::LogContext{value->route, value->detector_id, value->result_id} : zzt::qrcode::LogContext{};
 }
 
-zzt_qrcode_error_t zzt_qrcode_set_log_level(zzt_qrcode_log_level_t min_level) {
-    if (min_level < 0 || min_level > 4) {
-        log_warn("zzt_qrcode_set_log_level", "invalid log level");
-        return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
+zzt_qrcode_error_t zzt_qrcode_create_detector_with_options(
+        const zzt_qrcode_detector_options_t* options, zzt_qrcode_detector_h* out_detector) {
+    constexpr const char* op = "zzt_qrcode_create_detector_with_options";
+    if (!out_detector) return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
+    *out_detector = nullptr;
+    zzt::qrcode::LogRoute route;
+    if (options) {
+        if (options->struct_size < sizeof(*options)) {
+            zzt::qrcode::dispatch_log({}, op, ZZT_QRCODE_LOG_LEVEL_WARN, ZZT_QRCODE_ERROR_INVALID_ARGUMENT, std::string("Warning in ") + op + ": invalid options struct size");
+            return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
+        }
+        route.custom_logger = zzt::qrcode::lookup_logger(options->logger);
+        if (options->logger && !route.custom_logger) {
+            zzt::qrcode::dispatch_log({}, op, ZZT_QRCODE_LOG_LEVEL_WARN, ZZT_QRCODE_ERROR_INVALID_HANDLE, std::string("Warning in ") + op + ": invalid logger handle");
+            return ZZT_QRCODE_ERROR_INVALID_HANDLE;
+        }
+        if ((options->log_flags & ~ZZT_QRCODE_DETECTOR_LOG_PROPAGATE_TO_RUNTIME) != 0) {
+            zzt::qrcode::dispatch_log({route, 0, 0}, op, ZZT_QRCODE_LOG_LEVEL_WARN, ZZT_QRCODE_ERROR_INVALID_ARGUMENT, std::string("Warning in ") + op + ": invalid log flags");
+            return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
+        }
+        route.propagate_to_runtime = (options->log_flags & ZZT_QRCODE_DETECTOR_LOG_PROPAGATE_TO_RUNTIME) != 0;
     }
-    g_min_log_level.store(static_cast<int>(min_level), std::memory_order_release);
-    return ZZT_QRCODE_OK;
+    try {
+        *out_detector = WeChatQRCode::create_handle(route);
+        return ZZT_QRCODE_OK;
+    } catch (const std::bad_alloc&) {
+        zzt::qrcode::dispatch_log({route, 0, 0}, op, ZZT_QRCODE_LOG_LEVEL_ERROR, ZZT_QRCODE_ERROR_OUT_OF_MEMORY, std::string("Exception in ") + op + ": out of memory");
+        return ZZT_QRCODE_ERROR_OUT_OF_MEMORY;
+    } catch (const std::exception& e) {
+        zzt::qrcode::dispatch_log({route, 0, 0}, op, ZZT_QRCODE_LOG_LEVEL_ERROR, ZZT_QRCODE_ERROR_INTERNAL, std::string("Exception in ") + op + ": " + e.what());
+        return ZZT_QRCODE_ERROR_INTERNAL;
+    } catch (...) {
+        zzt::qrcode::dispatch_log({route, 0, 0}, op, ZZT_QRCODE_LOG_LEVEL_ERROR, ZZT_QRCODE_ERROR_INTERNAL, std::string("Unknown exception in ") + op);
+        return ZZT_QRCODE_ERROR_INTERNAL;
+    }
 }
 
 zzt_qrcode_detector_h zzt_qrcode_create_detector() {
-    try {
-        return WeChatQRCode::create_handle();
-    } catch (const std::bad_alloc &e) {
-        log_exception("zzt_qrcode_create_detector", e);
-        return nullptr;
-    } catch (const std::exception &e) {
-        log_exception("zzt_qrcode_create_detector", e);
-        return nullptr;
-    } catch (...) {
-        log_unknown("zzt_qrcode_create_detector");
-        return nullptr;
-    }
+    LogContextScope scope({}, "zzt_qrcode_create_detector");
+    zzt_qrcode_detector_h detector = nullptr;
+    return zzt_qrcode_create_detector_with_options(nullptr, &detector) == ZZT_QRCODE_OK ? detector : nullptr;
 }
 
 zzt_qrcode_error_t zzt_qrcode_release_detector(zzt_qrcode_detector_h detector) {
+    LogContextScope log_scope(detector_context(detector), "zzt_qrcode_release_detector");
     return catch_exceptions("zzt_qrcode_release_detector", [&] {
         if (detector == nullptr) {
             log_warn("zzt_qrcode_release_detector", "invalid detector handle");
@@ -310,13 +250,14 @@ static zzt_qrcode_error_t qrcode_detect_and_decode_internal(const char* fn, zzt_
             result_vector.emplace_back(std::make_shared<zzt::qrcode::QrcodeResult>(results[i], points[i]));
         }
     }
-    *out_result = QrcodeResultList::create_handle(result_vector);
+    *out_result = QrcodeResultList::create_handle(result_vector, detector_ptr->route, detector_ptr->detector_id);
     return ZZT_QRCODE_OK;
 }
 
 zzt_qrcode_error_t
 zzt_qrcode_detect_and_decode_data(zzt_qrcode_detector_h detector, const unsigned char *data, int data_len,
                                   zzt_qrcode_result_h *out_result) {
+    LogContextScope log_scope(detector_context(detector), "zzt_qrcode_detect_and_decode_data");
     TotalDurationLogger total_logger("zzt_qrcode_detect_and_decode_data", ZZT_QRCODE_LOG_LEVEL_VERBOSE);
     return catch_exceptions("zzt_qrcode_detect_and_decode_data", [&] {
         if (out_result == nullptr) {
@@ -358,6 +299,7 @@ zzt_qrcode_detect_and_decode_data(zzt_qrcode_detector_h detector, const unsigned
 zzt_qrcode_error_t
 zzt_qrcode_detect_and_decode_path_u8(zzt_qrcode_detector_h detector, const char8_t *path,
                                      zzt_qrcode_result_h *out_result) {
+    LogContextScope log_scope(detector_context(detector), "zzt_qrcode_detect_and_decode_path_u8");
     TotalDurationLogger total_logger("zzt_qrcode_detect_and_decode_path_u8", ZZT_QRCODE_LOG_LEVEL_VERBOSE);
     return catch_exceptions("zzt_qrcode_detect_and_decode_path_u8", [&] {
         if (out_result == nullptr) {
@@ -399,6 +341,7 @@ zzt_qrcode_detect_and_decode_path_u8(zzt_qrcode_detector_h detector, const char8
 zzt_qrcode_error_t
 zzt_qrcode_detect_and_decode_path_u16(zzt_qrcode_detector_h detector, const char16_t *path,
                                       zzt_qrcode_result_h *out_result) {
+    LogContextScope log_scope(detector_context(detector), "zzt_qrcode_detect_and_decode_path_u16");
     TotalDurationLogger total_logger("zzt_qrcode_detect_and_decode_path_u16", ZZT_QRCODE_LOG_LEVEL_VERBOSE);
     return catch_exceptions("zzt_qrcode_detect_and_decode_path_u16", [&] {
         if (out_result == nullptr) {
@@ -437,6 +380,7 @@ zzt_qrcode_error_t
 zzt_qrcode_detect_and_decode_pixels(zzt_qrcode_detector_h detector, const unsigned char *pixels,
                                     zzt_qrcode_pixel_format_t format, int width, int height, int stride,
                                     zzt_qrcode_result_h *out_result) {
+    LogContextScope log_scope(detector_context(detector), "zzt_qrcode_detect_and_decode_pixels");
     TotalDurationLogger total_logger("zzt_qrcode_detect_and_decode_pixels", ZZT_QRCODE_LOG_LEVEL_VERBOSE);
     return catch_exceptions("zzt_qrcode_detect_and_decode_pixels", [&] {
         if (out_result == nullptr) {
@@ -529,6 +473,7 @@ zzt_qrcode_detect_and_decode_pixels(zzt_qrcode_detector_h detector, const unsign
 }
 
 zzt_qrcode_error_t zzt_qrcode_release_result(zzt_qrcode_result_h result) {
+    LogContextScope log_scope(result_context(result), "zzt_qrcode_release_result");
     return catch_exceptions("zzt_qrcode_release_result", [&] {
         if (result == nullptr) {
             log_warn("zzt_qrcode_release_result", "invalid result handle");
@@ -544,6 +489,7 @@ zzt_qrcode_error_t zzt_qrcode_release_result(zzt_qrcode_result_h result) {
 
 zzt_qrcode_error_t
 zzt_qrcode_get_result_size(zzt_qrcode_result_h result, int *size) {
+    LogContextScope log_scope(result_context(result), "zzt_qrcode_get_result_size");
     return catch_exceptions("zzt_qrcode_get_result_size", [&] {
         auto result_ptr = QrcodeResultList::get(result);
         if (result_ptr == nullptr) {
@@ -562,6 +508,7 @@ zzt_qrcode_get_result_size(zzt_qrcode_result_h result, int *size) {
 
 zzt_qrcode_error_t
 zzt_qrcode_get_result_text(zzt_qrcode_result_h result, int index, char *output_text, int *buffer_size) {
+    LogContextScope log_scope(result_context(result), "zzt_qrcode_get_result_text");
     return catch_exceptions("zzt_qrcode_get_result_text", [&] {
         auto result_ptr = QrcodeResultList::get(result);
         if (result_ptr == nullptr) {
@@ -601,6 +548,7 @@ zzt_qrcode_get_result_text(zzt_qrcode_result_h result, int index, char *output_t
 
 zzt_qrcode_error_t
 zzt_qrcode_get_result_points(zzt_qrcode_result_h result, int index, float *output_point, int *buffer_size) {
+    LogContextScope log_scope(result_context(result), "zzt_qrcode_get_result_points");
     return catch_exceptions("zzt_qrcode_get_result_points", [&] {
         auto result_ptr = QrcodeResultList::get(result);
         if (result_ptr == nullptr) {

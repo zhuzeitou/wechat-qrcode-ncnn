@@ -1,5 +1,7 @@
 ﻿#ifndef ZZT_QRCODE_H
 #define ZZT_QRCODE_H
+#include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 #include <version>
@@ -76,40 +78,76 @@ typedef enum {
     ZZT_QRCODE_LOG_LEVEL_ERROR = 4,
 } zzt_qrcode_log_level_t;
 
-/**
- * Log callback for C API messages.
- *
- * @param level Log level.
- * @param message UTF-8 null-terminated message string. Valid only during this callback invocation.
- *
- * The callback may be invoked from arbitrary native threads. It should not throw, block for a long time, or retain
- * the message pointer after returning.
- */
-typedef void (*zzt_qrcode_log_callback_t)(zzt_qrcode_log_level_t level, const char *message);
+struct zzt_qrcode_logger_t;
+typedef struct zzt_qrcode_logger_t *zzt_qrcode_logger_h;
+typedef uint64_t zzt_qrcode_log_sink_id_t;
 
-/**
- * Set the process-wide C API log callback.
- *
- * By default no callback is installed and the C API is silent. Passing NULL clears the callback. Clearing the callback
- * prevents future dispatch but does not cancel callbacks already in progress.
- *
- * @param callback Callback function, or NULL to clear.
- * @return ZZT_QRCODE_OK Success
- */
-ZZT_QRCODE_API zzt_qrcode_error_t zzt_qrcode_set_log_callback(zzt_qrcode_log_callback_t callback);
+typedef struct {
+    uint32_t struct_size;
+    int32_t level;
+    int32_t error_code;
+    uint64_t detector_id;
+    uint64_t result_id;
+    const char *operation;
+    uint32_t operation_len;
+    const char *message;
+    uint32_t message_len;
+} zzt_qrcode_log_event_t;
 
-/**
- * Set the process-wide minimum log level.
- *
- * Messages below this level will be suppressed (not constructed/dispatched).
- * The default minimum log level is ZZT_QRCODE_LOG_LEVEL_WARN.
- * Setting the minimum level does not affect callback installation or removal.
- *
- * @param min_level The minimum log level to set. Valid range is 0 to 4 (inclusive).
- * @return ZZT_QRCODE_OK Success
- *         ZZT_QRCODE_ERROR_INVALID_ARGUMENT If min_level is not a valid enum value
- */
-ZZT_QRCODE_API zzt_qrcode_error_t zzt_qrcode_set_log_level(zzt_qrcode_log_level_t min_level);
+#ifdef _WIN32
+#define ZZT_QRCODE_CALLBACK __cdecl
+#else
+#define ZZT_QRCODE_CALLBACK
+#endif
+
+typedef void (ZZT_QRCODE_CALLBACK *zzt_qrcode_log_callback_t)(
+        const zzt_qrcode_log_event_t *event, void *user_data);
+typedef void (ZZT_QRCODE_CALLBACK *zzt_qrcode_log_user_data_destroy_t)(void *user_data);
+
+typedef struct {
+    uint32_t struct_size;
+    zzt_qrcode_log_callback_t callback;
+    void *user_data;
+    zzt_qrcode_log_user_data_destroy_t destroy_user_data;
+    int32_t min_level;
+} zzt_qrcode_log_sink_options_t;
+
+#define ZZT_QRCODE_LOG_SINK_OPTIONS_INIT \
+    { (uint32_t)sizeof(zzt_qrcode_log_sink_options_t), NULL, NULL, NULL, ZZT_QRCODE_LOG_LEVEL_WARN }
+
+ZZT_QRCODE_API zzt_qrcode_error_t zzt_qrcode_add_runtime_log_sink(
+        const zzt_qrcode_log_sink_options_t *options, zzt_qrcode_log_sink_id_t *out_sink_id);
+ZZT_QRCODE_API zzt_qrcode_error_t zzt_qrcode_remove_runtime_log_sink(
+        zzt_qrcode_log_sink_id_t sink_id);
+ZZT_QRCODE_API zzt_qrcode_error_t zzt_qrcode_set_runtime_log_sink_level(
+        zzt_qrcode_log_sink_id_t sink_id, zzt_qrcode_log_level_t min_level);
+ZZT_QRCODE_API zzt_qrcode_error_t zzt_qrcode_create_logger(zzt_qrcode_logger_h *out_logger);
+ZZT_QRCODE_API zzt_qrcode_error_t zzt_qrcode_release_logger(zzt_qrcode_logger_h logger);
+ZZT_QRCODE_API zzt_qrcode_error_t zzt_qrcode_logger_add_sink(
+        zzt_qrcode_logger_h logger, const zzt_qrcode_log_sink_options_t *options,
+        zzt_qrcode_log_sink_id_t *out_sink_id);
+ZZT_QRCODE_API zzt_qrcode_error_t zzt_qrcode_logger_remove_sink(
+        zzt_qrcode_logger_h logger, zzt_qrcode_log_sink_id_t sink_id);
+ZZT_QRCODE_API zzt_qrcode_error_t zzt_qrcode_logger_set_sink_level(
+        zzt_qrcode_logger_h logger, zzt_qrcode_log_sink_id_t sink_id,
+        zzt_qrcode_log_level_t min_level);
+
+typedef enum {
+    ZZT_QRCODE_DETECTOR_LOG_NONE = 0,
+    ZZT_QRCODE_DETECTOR_LOG_PROPAGATE_TO_RUNTIME = 1u << 0,
+} zzt_qrcode_detector_log_flags_t;
+
+typedef struct {
+    uint32_t struct_size;
+    zzt_qrcode_logger_h logger;
+    uint32_t log_flags;
+} zzt_qrcode_detector_options_t;
+
+#define ZZT_QRCODE_DETECTOR_OPTIONS_INIT \
+    { (uint32_t)sizeof(zzt_qrcode_detector_options_t), NULL, ZZT_QRCODE_DETECTOR_LOG_NONE }
+
+ZZT_QRCODE_API zzt_qrcode_error_t zzt_qrcode_create_detector_with_options(
+        const zzt_qrcode_detector_options_t *options, zzt_qrcode_detector_h *out_detector);
 
 /**
  * Create a QR code detector instance.

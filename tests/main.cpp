@@ -16,32 +16,27 @@
 namespace {
 
 std::atomic<int> g_log_callback_count{0};
-std::atomic<int> g_log_callback_invalid_message{0};
+std::atomic<int> g_log_callback_invalid_event{0};
 
-const char *log_level_name(zzt_qrcode_log_level_t level) {
-    switch (level) {
-        case ZZT_QRCODE_LOG_LEVEL_VERBOSE:
-            return "VERBOSE";
-        case ZZT_QRCODE_LOG_LEVEL_DEBUG:
-            return "DEBUG";
-        case ZZT_QRCODE_LOG_LEVEL_INFO:
-            return "INFO";
-        case ZZT_QRCODE_LOG_LEVEL_WARN:
-            return "WARN";
-        case ZZT_QRCODE_LOG_LEVEL_ERROR:
-            return "ERROR";
-        default:
-            return "UNKNOWN";
+const char *log_level_name(int32_t level) {
+    switch (static_cast<zzt_qrcode_log_level_t>(level)) {
+        case ZZT_QRCODE_LOG_LEVEL_VERBOSE: return "VERBOSE";
+        case ZZT_QRCODE_LOG_LEVEL_DEBUG: return "DEBUG";
+        case ZZT_QRCODE_LOG_LEVEL_INFO: return "INFO";
+        case ZZT_QRCODE_LOG_LEVEL_WARN: return "WARN";
+        case ZZT_QRCODE_LOG_LEVEL_ERROR: return "ERROR";
+        default: return "UNKNOWN";
     }
 }
 
-void on_qrcode_log(zzt_qrcode_log_level_t level, const char *message) {
+void ZZT_QRCODE_CALLBACK on_qrcode_log(const zzt_qrcode_log_event_t *event, void *) {
     g_log_callback_count.fetch_add(1, std::memory_order_relaxed);
-    if (message == nullptr) {
-        g_log_callback_invalid_message.fetch_add(1, std::memory_order_relaxed);
-        message = "";
+    if (event == nullptr || event->message == nullptr || event->operation == nullptr) {
+        g_log_callback_invalid_event.fetch_add(1, std::memory_order_relaxed);
+        return;
     }
-    std::cerr << "[zzt_qrcode][" << log_level_name(level) << "] " << message << std::endl;
+    std::cerr << "[zzt_qrcode][" << log_level_name(event->level) << "] "
+              << std::string(event->message, event->message_len) << std::endl;
 }
 
 }  // namespace
@@ -52,9 +47,13 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    zzt_qrcode_error_t ret_log = zzt_qrcode_set_log_callback(on_qrcode_log);
+    zzt_qrcode_log_sink_options_t log_options = ZZT_QRCODE_LOG_SINK_OPTIONS_INIT;
+    log_options.callback = on_qrcode_log;
+    log_options.min_level = ZZT_QRCODE_LOG_LEVEL_WARN;
+    zzt_qrcode_log_sink_id_t log_sink = 0;
+    zzt_qrcode_error_t ret_log = zzt_qrcode_add_runtime_log_sink(&log_options, &log_sink);
     if (ret_log != ZZT_QRCODE_OK) {
-        std::cerr << "set log callback failed with error: " << ret_log << std::endl;
+        std::cerr << "add runtime log sink failed with error: " << ret_log << std::endl;
         return EXIT_FAILURE;
     }
 
@@ -138,16 +137,16 @@ int main(int argc, char *argv[]) {
         std::cerr << "release detector failed with error: " << ret_release_detector << std::endl;
     }
 
-    if (g_log_callback_invalid_message.load(std::memory_order_relaxed) != 0) {
-        std::cerr << "log callback validation failed: received null message" << std::endl;
-        zzt_qrcode_set_log_callback(nullptr);
+    if (g_log_callback_invalid_event.load(std::memory_order_relaxed) != 0) {
+        std::cerr << "log callback validation failed: received invalid event" << std::endl;
+        zzt_qrcode_remove_runtime_log_sink(log_sink);
         return EXIT_FAILURE;
     }
     std::cout << "log callback count: " << g_log_callback_count.load(std::memory_order_relaxed) << std::endl;
 
-    ret_log = zzt_qrcode_set_log_callback(nullptr);
+    ret_log = zzt_qrcode_remove_runtime_log_sink(log_sink);
     if (ret_log != ZZT_QRCODE_OK) {
-        std::cerr << "clear log callback failed with error: " << ret_log << std::endl;
+        std::cerr << "remove runtime log sink failed with error: " << ret_log << std::endl;
         return EXIT_FAILURE;
     }
     return 0;

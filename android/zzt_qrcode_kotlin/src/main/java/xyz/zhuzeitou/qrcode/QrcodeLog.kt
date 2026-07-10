@@ -26,162 +26,159 @@ fun interface QrcodeLogCallback {
 }
 
 /**
- * Manages log callbacks for the QR code library.
- *
- * By default all logging is **silent**. Install a [QrcodeLogCallback] via [add]
- * to receive native log messages and forward them to your preferred logging
- * framework.
- *
- * ## Thread safety
- *
- * Listener dispatch is safe under concurrent modification — a snapshot of the
- * current listener list is taken before iteration (backed by
- * [CopyOnWriteArrayList][java.util.concurrent.CopyOnWriteArrayList]).
- * Exceptions thrown by individual listeners are silently swallowed so that
- * logging never affects QR detection and decoding behaviour.
- *
- * ## Main-thread dispatch
- *
- * Callbacks registered via [addMainThread] are dispatched to the Android main
- * [Looper] via a snapshot-based mechanism (see [addMainThread] for details).
+ * Static Android logging facade.  Its native runtime sink is created only while
+ * at least one direct or main-thread listener exists; the level is sink-local.
  */
 object QrcodeLog {
+    private val lock = java.lang.Object()
     private val listeners = java.util.concurrent.CopyOnWriteArrayList<QrcodeLogCallback>()
     private val mainThreadListeners = java.util.concurrent.CopyOnWriteArrayList<QrcodeLogCallback>()
     @Suppress("DEPRECATION")
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val dispatching = ThreadLocal<Boolean>()
+    private var desiredEnabled = false
+    private var actualEnabled = false
+    private var desiredLevel = 3
+    private var actualLevel = 3
+    private var desiredGeneration = 0L
+    private var appliedGeneration = 0L
+    private var reconcilePosted = false
+    private var reconciling = false
+    private var lastError = 0
 
-    /**
-     * Registers a log callback. Does nothing if [callback] is already registered.
-     * The callback is invoked synchronously on the calling (JNI/native) thread.
-     */
     fun add(callback: QrcodeLogCallback) {
         listeners.addIfAbsent(callback)
+        listenersChanged()
     }
-
-    /**
-     * Unregisters a previously registered log callback.
-     *
-     * @param callback The callback previously passed to [add].
-     */
     fun remove(callback: QrcodeLogCallback) {
         listeners.remove(callback)
+        listenersChanged()
     }
-
-    /**
-     * Removes all registered log callbacks, restoring silent operation.
-     */
     fun clear() {
         listeners.clear()
+        listenersChanged()
     }
-
-    /**
-     * Registers a log callback whose [QrcodeLogCallback.onLog] method will always
-     * be invoked on the Android main (UI) thread via the main [Looper].
-     *
-     * ### Dispatch semantics
-     *
-     * 1. When [dispatch] is called from JNI, the main-thread listener list is
-     *    **snapshot** via `toArray()`.
-     * 2. If the current thread is already the main Looper thread, the snapshot is
-     *    invoked **synchronously** (inline).
-     * 3. Otherwise, a [Runnable] capturing the snapshot is posted to the main
-     *    [Handler]. If [Handler.post] returns `false`, the log message for that
-     *    dispatch cycle is silently dropped.
-     *
-     * ### Important caveats
-     *
-     * - Callback invocations are **asynchronous** relative to direct callbacks.
-     * - If a callback is removed **after** a dispatch snapshot has been taken, it
-     *   may still receive log messages from that snapshot.
-     * - If [Handler.post] fails (e.g. during Looper shutdown) the message is
-     *   silently dropped.
-     * - Exceptions thrown by the callback are silently swallowed.
-     * - This API is only meaningful on Android (requires a main Looper).
-     */
     fun addMainThread(callback: QrcodeLogCallback) {
         mainThreadListeners.addIfAbsent(callback)
+        listenersChanged()
     }
-
-    /**
-     * Removes a previously registered main-thread log callback.
-     *
-     * Note: if the callback was already captured in a dispatch snapshot it may
-     * still receive the log messages from that snapshot even after removal.
-     */
     fun removeMainThread(callback: QrcodeLogCallback) {
         mainThreadListeners.remove(callback)
+        listenersChanged()
     }
-
-    /**
-     * Removes all registered main-thread log callbacks.
-     *
-     * Already-queued dispatch snapshots may still deliver log messages to
-     * previously registered callbacks.
-     */
     fun clearMainThread() {
         mainThreadListeners.clear()
+        listenersChanged()
     }
 
-    /**
-     * Sets the process-wide minimum log level.
-     * Native log messages below this level will be filtered out before dispatch.
-     *
-     * Valid values are:
-     * - 0: VERBOSE (enables performance diagnostics)
-     * - 1: DEBUG
-     * - 2: INFO
-     * - 3: WARN (default)
-     * - 4: ERROR
-     *
-     * @param minLevel The minimum log level to set.
-     * @return 0 on success (ZZT_QRCODE_OK), or a non-zero error code if the level is invalid.
-     *
-     * ### Android Caveat
-     * JNI currently installs the native callback unconditionally during initialization.
-     * Lowering the minimum level will cause the native library to dispatch messages
-     * through JNI even if no JVM-side listeners are registered in [QrcodeLog].
-     */
+    /** Sets this Android sink's minimum level, not a process-wide level. */
     fun setMinimumLevel(minLevel: Int): Int {
-        return NativeLib.setLogLevel(minLevel)
-    }
-
-    /**
-     * Dispatches a log message to all registered callbacks.
-     *
-     * This is the internal entry point called from [NativeLib.dispatchLog].
-     * The listener list is snapshot before iteration. Exceptions from individual
-     * callbacks are silently discarded.
-     */
-    internal fun dispatch(level: Int, message: String) {
-        // --- dispatch to direct (arbitrary-thread) callbacks ---
-        for (cb in listeners) {
-            try {
-                cb.onLog(level, message)
-            } catch (_: Throwable) {
-                // Swallow — logging must never affect QR behaviour.
+        synchronized(lock) {
+            if (desiredLevel != minLevel) {
+                desiredLevel = minLevel
+                ++desiredGeneration
             }
         }
+        scheduleReconcile()
+        return synchronized(lock) { lastError }
+    }
 
-        // --- dispatch to main-thread callbacks ---
-        if (mainThreadListeners.isEmpty()) return
-        val snapshot = mainThreadListeners.toArray()
-        val task = Runnable {
-            for (obj in snapshot) {
-                val cb = obj as QrcodeLogCallback
+    private fun listenersChanged() {
+        synchronized(lock) {
+            val enabled = listeners.isNotEmpty() || mainThreadListeners.isNotEmpty()
+            if (enabled != desiredEnabled) {
+                desiredEnabled = enabled
+                ++desiredGeneration
+            }
+        }
+        scheduleReconcile()
+    }
+
+    private fun scheduleReconcile() {
+        if (dispatching.get() == true) {
+            synchronized(lock) {
+                if (!reconcilePosted) {
+                    reconcilePosted = mainHandler.post { reconcile() }
+                }
+            }
+        } else {
+            reconcile()
+        }
+    }
+
+    private fun reconcile() {
+        var interrupted = false
+        synchronized(lock) {
+            reconcilePosted = false
+            while (reconciling) {
+                try {
+                    lock.wait()
+                } catch (_: InterruptedException) {
+                    interrupted = true
+                }
+            }
+            if (desiredLevel in 0..4 && actualEnabled == desiredEnabled &&
+                (!actualEnabled || actualLevel == desiredLevel)) {
+                return
+            }
+            reconciling = true
+        }
+        try {
+            while (true) {
+                val enabled: Boolean
+                val level: Int
+                val generation: Long
+                synchronized(lock) {
+                    enabled = desiredEnabled
+                    level = desiredLevel
+                    generation = desiredGeneration
+                }
+                val error = NativeLib.configureLogSinkFromFacade(enabled, level)
+                synchronized(lock) {
+                    lastError = error
+                    if (error == 0 && generation == desiredGeneration) {
+                        actualEnabled = enabled
+                        actualLevel = level
+                        appliedGeneration = generation
+                    }
+                    if (generation == desiredGeneration || error != 0) return
+                }
+            }
+        } finally {
+            synchronized(lock) {
+                reconciling = false
+                lock.notifyAll()
+            }
+            if (interrupted) Thread.currentThread().interrupt()
+        }
+    }
+
+    internal fun dispatch(level: Int, message: String) {
+        dispatching.set(true)
+        try {
+            for (cb in listeners) {
                 try {
                     cb.onLog(level, message)
                 } catch (_: Throwable) {
-                    // Swallow — logging must never affect QR behaviour.
+                    // Logging must not alter native QR operation.
                 }
             }
-        }
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            task.run()
-        } else {
-            if (!mainHandler.post(task)) {
-                // Handler.post returned false — silently discard this log.
+            if (mainThreadListeners.isNotEmpty()) {
+                val snapshot = mainThreadListeners.toArray()
+                val task = Runnable {
+                    for (entry in snapshot) {
+                        try {
+                            (entry as QrcodeLogCallback).onLog(level, message)
+                        } catch (_: Throwable) {
+                            // Logging must not alter native QR operation.
+                        }
+                    }
+                }
+                if (Looper.myLooper() == Looper.getMainLooper()) task.run()
+                else mainHandler.post(task)
             }
+        } finally {
+            dispatching.remove()
         }
     }
 }

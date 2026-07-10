@@ -341,18 +341,107 @@ zzt_qrcode_release_result(result);
 zzt_qrcode_release_detector(detector);
 ```
 
-Optional native logs are disabled by default. Install a callback only when the host application wants to handle logs:
+Native logging is opt-in and uses independent runtime sinks. Each sink has its own
+minimum level, so changing or removing one sink never changes another consumer.
 
 ```c
-static void on_qrcode_log(zzt_qrcode_log_level_t level, const char *message) {
-    // message is UTF-8 and valid only during this call.
-    // Forward to your application's logger here.
+#include <stdio.h>
+#include <stdlib.h>
+#include "zzt_qrcode/qrcode.h"
+
+struct app_log_context {
+    FILE *stream;
+};
+
+static void ZZT_QRCODE_CALLBACK on_qrcode_log(
+        const zzt_qrcode_log_event_t *event, void *user_data) {
+    struct app_log_context *context = user_data;
+    // operation and message are NUL-terminated UTF-8 only for this callback.
+    // Copy either field before returning if it must outlive this call.
+    fprintf(context->stream, "[%d] %.*s: %.*s\n",
+            event->level, (int)event->operation_len, event->operation,
+            (int)event->message_len, event->message);
 }
 
-zzt_qrcode_set_log_callback(on_qrcode_log);
-// ... use the library ...
-zzt_qrcode_set_log_callback(NULL); // clear callback, return to silent mode
+static void ZZT_QRCODE_CALLBACK destroy_app_log_context(void *user_data) {
+    free(user_data);
+}
+
+struct app_log_context *context = malloc(sizeof(*context));
+context->stream = stderr;
+zzt_qrcode_log_sink_options_t sink_options =
+        ZZT_QRCODE_LOG_SINK_OPTIONS_INIT;
+sink_options.callback = on_qrcode_log;
+sink_options.user_data = context;
+sink_options.destroy_user_data = destroy_app_log_context;
+sink_options.min_level = ZZT_QRCODE_LOG_LEVEL_WARN;
+
+zzt_qrcode_log_sink_id_t sink_id = 0;
+if (zzt_qrcode_add_runtime_log_sink(&sink_options, &sink_id) != ZZT_QRCODE_OK) {
+    free(context); // The caller retains user_data after a failed registration.
+} else {
+    // ... use the library ...
+    zzt_qrcode_remove_runtime_log_sink(sink_id);
+    // Removal waits until this sink is quiescent, then calls destroy_app_log_context once.
+}
 ```
+
+The library takes ownership of `user_data` only after a successful add. Log and
+destroy callbacks can run synchronously on arbitrary threads and can be reentrant;
+they must not throw across the C boundary. Removing a sink prevents future
+delivery, waits for callbacks already using it to finish when called externally,
+and invokes `destroy_user_data` exactly once after that quiescence. Do not free
+successful-registration user data yourself.
+
+For detector-specific logging, create a logger and attach it through detector
+options. A custom logger overrides runtime sinks by default; set
+`ZZT_QRCODE_DETECTOR_LOG_PROPAGATE_TO_RUNTIME` to write to the custom logger
+first and then to runtime sinks.
+
+```c
+struct app_log_context *custom_context = malloc(sizeof(*custom_context));
+custom_context->stream = stderr;
+
+zzt_qrcode_logger_h logger = NULL;
+if (zzt_qrcode_create_logger(&logger) != ZZT_QRCODE_OK) {
+    free(custom_context);
+} else {
+    zzt_qrcode_log_sink_id_t custom_sink_id = 0;
+    zzt_qrcode_log_sink_options_t custom_sink =
+            ZZT_QRCODE_LOG_SINK_OPTIONS_INIT;
+    custom_sink.callback = on_qrcode_log;
+    custom_sink.user_data = custom_context;
+    custom_sink.destroy_user_data = destroy_app_log_context;
+    custom_sink.min_level = ZZT_QRCODE_LOG_LEVEL_INFO;
+
+    if (zzt_qrcode_logger_add_sink(logger, &custom_sink, &custom_sink_id)
+            != ZZT_QRCODE_OK) {
+        free(custom_context); // still owned by the caller on failure
+        zzt_qrcode_release_logger(logger);
+    } else {
+        zzt_qrcode_detector_options_t detector_options =
+                ZZT_QRCODE_DETECTOR_OPTIONS_INIT;
+        detector_options.logger = logger;
+        // Omit this assignment for custom-only logging.
+        detector_options.log_flags =
+                ZZT_QRCODE_DETECTOR_LOG_PROPAGATE_TO_RUNTIME;
+
+        zzt_qrcode_detector_h detector = NULL;
+        if (zzt_qrcode_create_detector_with_options(&detector_options, &detector)
+                == ZZT_QRCODE_OK) {
+            // ... use and release detector ...
+            zzt_qrcode_release_detector(detector);
+        }
+        zzt_qrcode_logger_remove_sink(logger, custom_sink_id);
+        zzt_qrcode_release_logger(logger);
+    }
+}
+```
+
+Releasing a public logger handle does not stop routes already retained by
+detectors or results; remove its sinks first when immediate silence is required.
+`zzt_qrcode_create_detector_with_options(NULL, &detector)` uses runtime logging
+only. A null `logger` with the propagation flag is also runtime-only.
 
 ### Android
 
@@ -361,13 +450,17 @@ zzt_qrcode_set_log_callback(NULL); // clear callback, return to silent mode
 ```kotlin
 import xyz.zhuzeitou.qrcode.QrcodeDetector
 import xyz.zhuzeitou.qrcode.QrcodeLog
+import xyz.zhuzeitou.qrcode.QrcodeLogCallback
 import xyz.zhuzeitou.qrcode.QrcodeResults
 import xyz.zhuzeitou.qrcode.QrcodeResults.QrcodeErrorCode
 
-// Optional: native/wrapper logging is silent until a callback is registered.
-QrcodeLog.add { level, message ->
+// This facade registers one independent runtime sink only while it has listeners.
+// Direct listeners run synchronously on the native calling thread.
+val logCallback = QrcodeLogCallback { level, message ->
     Log.d("QRCode", message)
 }
+QrcodeLog.setMinimumLevel(3) // WARN for this Android sink only.
+QrcodeLog.add(logCallback)
 
 // Coroutine-based detection with structured concurrency
 lifecycleScope.launch {
@@ -389,7 +482,12 @@ lifecycleScope.launch {
     }
 }
 
-// Synchronous and callback-based APIs are also available
+// Remove the listener when it is no longer needed; no JNI log dispatch occurs
+// after the facade has no direct or main-thread listeners.
+QrcodeLog.remove(logCallback)
+
+// Synchronous and callback-based APIs are also available.
+// QrcodeLog.addMainThread(...) dispatches through the Android main Handler.
 // detector.detectQRCodeSync(bitmap)
 // detector.detectQRCode(bitmap) { results -> ... }
 ```
@@ -399,10 +497,14 @@ lifecycleScope.launch {
 ```java
 import xyz.zhuzeitou.qrcode.QrcodeDetector;
 import xyz.zhuzeitou.qrcode.NativeLib;
+import xyz.zhuzeitou.qrcode.QrcodeLogCallback;
 import xyz.zhuzeitou.qrcode.QrcodeResults;
 
-// Optional: native/wrapper logging is silent until a callback is registered.
-NativeLib.addLogCallback((level, message) -> Log.d("QRCode", message));
+// This facade registers one independent runtime sink only while it has listeners.
+// Direct listeners run synchronously on the native calling thread.
+QrcodeLogCallback logCallback = (level, message) -> Log.d("QRCode", message);
+NativeLib.setLogLevel(3); // WARN for this Android sink only.
+NativeLib.addLogCallback(logCallback);
 
 // Initialize detector (using try-with-resources to automatically close/release)
 try (QrcodeDetector detector = new QrcodeDetector()) {
@@ -427,7 +529,10 @@ try (QrcodeDetector detector = new QrcodeDetector()) {
     e.printStackTrace();
 }
 
-// Async detection is also supported
+NativeLib.removeLogCallback(logCallback);
+
+// Async detection is also supported.
+// NativeLib.addMainThreadLogCallback(...) dispatches through the Android main Handler.
 // detector.detectQRCode(bitmap, results -> { ... });
 ```
 
@@ -436,12 +541,14 @@ try (QrcodeDetector detector = new QrcodeDetector()) {
 ```csharp
 using ZZT.QRCode;
 
-// Optional: native/wrapper logging is silent until a handler is attached.
-// Callbacks may arrive off the Unity main thread; dispatch before touching Unity APIs.
-QrcodeDetector.OnLogMessage += (level, message) =>
+// This static facade owns an independent runtime sink while either event has handlers.
+// OnLogMessage is synchronous and may run off the Unity main thread.
+QrcodeDetector.SetMinimumLogLevel(QrcodeDetector.LogLevel.Warn);
+QrcodeDetector.LogMessageHandler logHandler = (level, message) =>
 {
     // Forward to your logging system here.
 };
+QrcodeDetector.OnLogMessage += logHandler;
 
 // Initialize detector
 // QrcodeDetector implements IDisposable, so use 'using' statement to ensure resource release
@@ -458,6 +565,9 @@ using (var detector = new QrcodeDetector())
         }
     }
 }
+QrcodeDetector.OnLogMessage -= logHandler;
+// OnLogMessageMainThread is the main-thread alternative. With no handlers on
+// either event, the Unity facade unregisters its sink and receives no native dispatch.
 ```
 
 ### NCNN Dependency Configuration

@@ -64,109 +64,138 @@ namespace ZZT.QRCode.Native
         [DllImport(DLLName, EntryPoint = "zzt_qrcode_get_result_points")]
         internal static extern int GetResultPoints(NativeResult result, int index, [Out] float[] pts, ref int ptsLen);
 
-        // ─── Log callback support ────────────────────────────────────────────────
-        //
-        // The native C API (zzt_qrcode_set_log_callback) accepts one process-wide
-        // callback.  We root a single P/Invoke delegate in a static field so the GC
-        // never collects it, then forward all calls to a managed event that users
-        // subscribe to via QrcodeDetector.OnLogMessage.
-        //
-        // Callbacks may arrive from any native thread.  The message is copied out
-        // of the IntPtr immediately — native pointers are never retained.
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct NativeLogEvent
+        {
+            internal uint struct_size;
+            internal int level;
+            internal int error_code;
+            internal ulong detector_id;
+            internal ulong result_id;
+            internal IntPtr operation;
+            internal uint operation_len;
+            internal IntPtr message;
+            internal uint message_len;
+        }
 
-        /// <summary>
-        /// P/Invoke delegate matching <c>zzt_qrcode_log_callback_t</c>.
-        /// Uses <c>int</c> for the level parameter to avoid coupling to the public enum.
-        /// </summary>
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-        internal delegate void NativeLogCallback(int level, IntPtr message);
+        internal delegate void NativeLogCallback(IntPtr eventPtr, IntPtr userData);
 
-        /// <summary>
-        /// Rooted delegate instance — <b>must</b> be a static field to prevent GC
-        /// collection while native code holds the pointer.
-        /// </summary>
-        private static readonly NativeLogCallback _nativeLogCallback = OnNativeLogCallback;
-        private static readonly object LogCallbackLock = new();
-        private static bool _nativeLogCallbackInstalled;
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        internal delegate void NativeLogUserDataDestroy(IntPtr userData);
 
-        /// <summary>
-        /// Internal event that receives despatched native log messages.
-        /// QrcodeDetector.OnLogMessage bridges this to the public API.
-        /// </summary>
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct NativeLogSinkOptions
+        {
+            internal uint struct_size;
+            [MarshalAs(UnmanagedType.FunctionPtr)]
+            internal NativeLogCallback callback;
+            internal IntPtr user_data;
+            [MarshalAs(UnmanagedType.FunctionPtr)]
+            internal NativeLogUserDataDestroy destroy_user_data;
+            internal int min_level;
+        }
+
+        // Native keeps both delegates after registration. These fields therefore remain
+        // rooted for the complete managed process lifetime.
+        private static readonly NativeLogCallback NativeLogCallbackRoot = OnNativeLogCallback;
+        private static readonly NativeLogUserDataDestroy NativeLogDestroyRoot = OnNativeLogDestroy;
+
         internal static event Action<int, string> LogMessageReceived;
 
-        [DllImport(DLLName, EntryPoint = "zzt_qrcode_set_log_callback", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int SetLogCallback(NativeLogCallback callback);
+        [DllImport(DLLName, EntryPoint = "zzt_qrcode_add_runtime_log_sink",
+            CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int AddRuntimeLogSink(ref NativeLogSinkOptions options, out ulong sinkId);
 
-        [DllImport(DLLName, EntryPoint = "zzt_qrcode_set_log_level", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int SetLogLevel(int minLevel);
+        [DllImport(DLLName, EntryPoint = "zzt_qrcode_remove_runtime_log_sink",
+            CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int RemoveRuntimeLogSink(ulong sinkId);
 
-        /// <summary>
-        /// Ensure the native callback is installed.  Safe to call multiple times.
-        /// </summary>
-        internal static void EnsureLogCallbackInstalled()
+        [DllImport(DLLName, EntryPoint = "zzt_qrcode_set_runtime_log_sink_level",
+            CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int SetRuntimeLogSinkLevel(ulong sinkId, int minLevel);
+
+        internal static NativeLogSinkOptions CreateLogSinkOptions(IntPtr userData, int minLevel)
         {
-            lock (LogCallbackLock)
+            return new NativeLogSinkOptions
             {
-                if (_nativeLogCallbackInstalled) return;
-                if (SetLogCallback(_nativeLogCallback) == 0)
-                {
-                    _nativeLogCallbackInstalled = true;
-                }
-            }
+                struct_size = (uint)Marshal.SizeOf<NativeLogSinkOptions>(),
+                callback = NativeLogCallbackRoot,
+                user_data = userData,
+                destroy_user_data = NativeLogDestroyRoot,
+                min_level = minLevel
+            };
         }
 
-        /// <summary>
-        /// Clear the native callback.  Subsequent native log events are discarded.
-        /// </summary>
-        internal static void ClearLogCallback()
-        {
-            lock (LogCallbackLock)
-            {
-                if (!_nativeLogCallbackInstalled) return;
-                if (SetLogCallback(null) == 0)
-                {
-                    _nativeLogCallbackInstalled = false;
-                }
-            }
-        }
-
-        /// <summary>
-        /// Native callback — called from unmanaged code (any thread).
-        /// Copies the UTF-8 message immediately and dispatches to managed subscribers.
-        /// All exceptions are swallowed so logging never disrupts QR detection.
-        /// </summary>
 #if (UNITY_IOS || ENABLE_IL2CPP) && !UNITY_EDITOR
         [AOT.MonoPInvokeCallback(typeof(NativeLogCallback))]
 #endif
-        private static void OnNativeLogCallback(int level, IntPtr message)
+        private static void OnNativeLogCallback(IntPtr eventPtr, IntPtr userData)
         {
-            string msgStr = PtrToUTF8(message);
-
+            bool entered = false;
             try
             {
-                LogMessageReceived?.Invoke(level, msgStr);
+                QrcodeDetector.EnterNativeLogCallback();
+                entered = true;
+                if (eventPtr == IntPtr.Zero) return;
+                NativeLogEvent nativeEvent = Marshal.PtrToStructure<NativeLogEvent>(eventPtr);
+                string message = PtrToUTF8(nativeEvent.message, nativeEvent.message_len);
+                LogMessageReceived?.Invoke(nativeEvent.level, message);
             }
             catch
             {
-                // Swallow — logging must never affect native QR processing.
+                // No managed exception may cross a reverse P/Invoke boundary.
+            }
+            finally
+            {
+                if (entered)
+                {
+                    try
+                    {
+                        QrcodeDetector.ExitNativeLogCallback();
+                    }
+                    catch
+                    {
+                        // Callback bookkeeping must not leak across the ABI boundary.
+                    }
+                }
             }
         }
 
-        /// <summary>
-        /// Convert a null-terminated UTF-8 IntPtr to a managed string.
-        /// Returns <c>null</c> for a null pointer and <see cref="string.Empty"/> for
-        /// a zero-length string.
-        /// </summary>
-        private static string PtrToUTF8(IntPtr ptr)
+#if (UNITY_IOS || ENABLE_IL2CPP) && !UNITY_EDITOR
+        [AOT.MonoPInvokeCallback(typeof(NativeLogUserDataDestroy))]
+#endif
+        private static void OnNativeLogDestroy(IntPtr userData)
+        {
+            try
+            {
+                QrcodeDetector.OnNativeLogSinkDestroyed(userData);
+            }
+            catch
+            {
+                // Native teardown must complete even if managed cleanup fails.
+            }
+            finally
+            {
+                try
+                {
+                    QrcodeDetector.FinalizeNativeLogSinkLifetime(userData);
+                }
+                catch
+                {
+                    // A malformed stale pointer must not cross into native code.
+                }
+            }
+        }
+
+        private static string PtrToUTF8(IntPtr ptr, uint length)
         {
             if (ptr == IntPtr.Zero) return null;
-            int len = 0;
-            while (Marshal.ReadByte(ptr, len) != 0) len++;
-            if (len == 0) return string.Empty;
-            byte[] buf = new byte[len];
-            Marshal.Copy(ptr, buf, 0, len);
-            return Encoding.UTF8.GetString(buf);
+            if (length == 0) return string.Empty;
+            if (length > int.MaxValue) return string.Empty;
+            byte[] buffer = new byte[(int)length];
+            Marshal.Copy(ptr, buffer, 0, buffer.Length);
+            return Encoding.UTF8.GetString(buffer);
         }
     }
 }
