@@ -18,11 +18,10 @@ fun interface QrcodeLogCallback {
     /**
      * Called when the native QR code library emits a log message.
      *
-     * @param level   Log level constant (0=VERBOSE, 1=DEBUG, 2=INFO,
-     *                3=WARN, 4=ERROR).
+     * @param level   Log severity.
      * @param message Log message text.
      */
-    fun onLog(level: Int, message: String)
+    fun onLog(level: LogLevel, message: String)
 }
 
 /**
@@ -72,10 +71,11 @@ object QrcodeLog {
     }
 
     /** Sets this Android sink's minimum level, not a process-wide level. */
-    fun setMinimumLevel(minLevel: Int): Int {
+    fun setMinimumLevel(minLevel: LogLevel): Int {
+        val nativeLevel = minLevel.nativeValue
         synchronized(lock) {
-            if (desiredLevel != minLevel) {
-                desiredLevel = minLevel
+            if (desiredLevel != nativeLevel) {
+                desiredLevel = nativeLevel
                 ++desiredGeneration
             }
         }
@@ -154,11 +154,13 @@ object QrcodeLog {
     }
 
     internal fun dispatch(level: Int, message: String) {
+        val logLevel = LogLevel.fromNativeValue(level) ?: return
+
         dispatching.set(true)
         try {
             for (cb in listeners) {
                 try {
-                    cb.onLog(level, message)
+                    cb.onLog(logLevel, message)
                 } catch (_: Throwable) {
                     // Logging must not alter native QR operation.
                 }
@@ -168,7 +170,7 @@ object QrcodeLog {
                 val task = Runnable {
                     for (entry in snapshot) {
                         try {
-                            (entry as QrcodeLogCallback).onLog(level, message)
+                            (entry as QrcodeLogCallback).onLog(logLevel, message)
                         } catch (_: Throwable) {
                             // Logging must not alter native QR operation.
                         }

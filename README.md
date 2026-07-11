@@ -450,16 +450,17 @@ only. A null `logger` with the propagation flag is also runtime-only.
 ```kotlin
 import xyz.zhuzeitou.qrcode.QrcodeDetector
 import xyz.zhuzeitou.qrcode.QrcodeLog
+import xyz.zhuzeitou.qrcode.LogLevel
 import xyz.zhuzeitou.qrcode.QrcodeLogCallback
 import xyz.zhuzeitou.qrcode.QrcodeResults
 import xyz.zhuzeitou.qrcode.QrcodeResults.QrcodeErrorCode
 
 // This facade registers one independent runtime sink only while it has listeners.
 // Direct listeners run synchronously on the native calling thread.
-val logCallback = QrcodeLogCallback { level, message ->
+val logCallback = QrcodeLogCallback { level: LogLevel, message ->
     Log.d("QRCode", message)
 }
-QrcodeLog.setMinimumLevel(3) // WARN for this Android sink only.
+QrcodeLog.setMinimumLevel(LogLevel.WARN) // WARN for this Android sink only.
 QrcodeLog.add(logCallback)
 
 // Coroutine-based detection with structured concurrency
@@ -496,15 +497,16 @@ QrcodeLog.remove(logCallback)
 
 ```java
 import xyz.zhuzeitou.qrcode.QrcodeDetector;
-import xyz.zhuzeitou.qrcode.NativeLib;
+import xyz.zhuzeitou.qrcode.LogLevel;
+import xyz.zhuzeitou.qrcode.QrcodeLog;
 import xyz.zhuzeitou.qrcode.QrcodeLogCallback;
 import xyz.zhuzeitou.qrcode.QrcodeResults;
 
 // This facade registers one independent runtime sink only while it has listeners.
 // Direct listeners run synchronously on the native calling thread.
 QrcodeLogCallback logCallback = (level, message) -> Log.d("QRCode", message);
-NativeLib.setLogLevel(3); // WARN for this Android sink only.
-NativeLib.addLogCallback(logCallback);
+QrcodeLog.setMinimumLevel(LogLevel.WARN); // WARN for this Android sink only.
+QrcodeLog.add(logCallback);
 
 // Initialize detector (using try-with-resources to automatically close/release)
 try (QrcodeDetector detector = new QrcodeDetector()) {
@@ -529,10 +531,10 @@ try (QrcodeDetector detector = new QrcodeDetector()) {
     e.printStackTrace();
 }
 
-NativeLib.removeLogCallback(logCallback);
+QrcodeLog.remove(logCallback);
 
 // Async detection is also supported.
-// NativeLib.addMainThreadLogCallback(...) dispatches through the Android main Handler.
+// QrcodeLog.addMainThread(...) dispatches through the Android main Handler.
 // detector.detectQRCode(bitmap, results -> { ... });
 ```
 
@@ -543,12 +545,12 @@ using ZZT.QRCode;
 
 // This static facade owns an independent runtime sink while either event has handlers.
 // OnLogMessage is synchronous and may run off the Unity main thread.
-QrcodeDetector.SetMinimumLogLevel(QrcodeDetector.LogLevel.Warn);
-QrcodeDetector.LogMessageHandler logHandler = (level, message) =>
+QrcodeLog.SetMinimumLogLevel(QrcodeLog.LogLevel.Warn);
+QrcodeLog.LogMessageHandler logHandler = (level, message) =>
 {
     // Forward to your logging system here.
 };
-QrcodeDetector.OnLogMessage += logHandler;
+QrcodeLog.OnLogMessage += logHandler;
 
 // Initialize detector
 // QrcodeDetector implements IDisposable, so use 'using' statement to ensure resource release
@@ -565,8 +567,8 @@ using (var detector = new QrcodeDetector())
         }
     }
 }
-QrcodeDetector.OnLogMessage -= logHandler;
-// OnLogMessageMainThread is the main-thread alternative. With no handlers on
+QrcodeLog.OnLogMessage -= logHandler;
+// QrcodeLog.OnLogMessageMainThread is the main-thread alternative. With no handlers on
 // either event, the Unity facade unregisters its sink and receives no native dispatch.
 ```
 

@@ -16,29 +16,28 @@ import static org.junit.Assert.assertTrue;
 
 @RunWith(AndroidJUnit4.class)
 public class ExampleInstrumentedTest {
-    private static final int WARN = 3;
     private static final long TIMEOUT_SECONDS = 10;
 
     @After
     public void clearLogListeners() {
-        NativeLib.clearLogCallbacks();
-        NativeLib.clearMainThreadLogCallbacks();
+        QrcodeLog.clear();
+        QrcodeLog.clearMainThread();
     }
 
     @Test
     public void directListenerReceivesInvalidHandleSynchronouslyAndDisables() {
         AtomicInteger callbacks = new AtomicInteger();
         QrcodeLogCallback callback = (level, message) -> {
-            assertEquals(WARN, level);
+            assertEquals(LogLevel.WARN, level);
             callbacks.incrementAndGet();
         };
 
-        assertEquals(0, NativeLib.setLogLevel(WARN));
-        NativeLib.addLogCallback(callback);
+        assertEquals(0, QrcodeLog.setMinimumLevel(LogLevel.WARN));
+        QrcodeLog.add(callback);
         NativeLib.detectAndDecodePixels(0L, new byte[]{0}, 0, 1, 1, 1);
         assertEquals(1, callbacks.get());
 
-        NativeLib.removeLogCallback(callback);
+        QrcodeLog.remove(callback);
         NativeLib.detectAndDecodePixels(0L, new byte[]{0}, 0, 1, 1, 1);
         assertEquals(1, callbacks.get());
     }
@@ -59,7 +58,7 @@ public class ExampleInstrumentedTest {
             callbackEntered.countDown();
             try {
                 assertTrue(permitReentrantRemoval.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
-                NativeLib.removeLogCallback(callbackRef.get());
+                QrcodeLog.remove(callbackRef.get());
                 reentrantRemovalReturned.countDown();
             } catch (InterruptedException exception) {
                 Thread.currentThread().interrupt();
@@ -68,8 +67,8 @@ public class ExampleInstrumentedTest {
         };
         callbackRef.set(callback);
 
-        assertEquals(0, NativeLib.setLogLevel(WARN));
-        NativeLib.addLogCallback(callback);
+        assertEquals(0, QrcodeLog.setMinimumLevel(LogLevel.WARN));
+        QrcodeLog.add(callback);
         Thread emitter = new Thread(() -> {
             NativeLib.detectAndDecodePixels(0L, new byte[]{0}, 0, 1, 1, 1);
             emitterFinished.countDown();
@@ -79,7 +78,7 @@ public class ExampleInstrumentedTest {
 
         Thread remover = new Thread(() -> {
             removalStarted.countDown();
-            NativeLib.removeLogCallback(callback);
+            QrcodeLog.remove(callback);
             removerFinished.countDown();
         });
         remover.start();

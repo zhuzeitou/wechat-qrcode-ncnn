@@ -26,11 +26,14 @@ public class NativeLib {
     }
 
     static void dispatchLog(int level, String message) {
+        LogLevel logLevel = LogLevel.fromNativeValue(level);
+        if (logLevel == null) return;
+
         dispatchingLog.set(Boolean.TRUE);
         try {
             for (QrcodeLogCallback callback : logCallbacks) {
                 try {
-                    callback.onLog(level, message);
+                    callback.onLog(logLevel, message);
                 } catch (Throwable ignored) {
                     // Logging must not alter native QR operation.
                 }
@@ -40,7 +43,7 @@ public class NativeLib {
                 Runnable task = () -> {
                     for (Object object : snapshot) {
                         try {
-                            ((QrcodeLogCallback) object).onLog(level, message);
+                            ((QrcodeLogCallback) object).onLog(logLevel, message);
                         } catch (Throwable ignored) {
                             // Logging must not alter native QR operation.
                         }
@@ -139,38 +142,37 @@ public class NativeLib {
         }
     }
 
-    public static void addLogCallback(QrcodeLogCallback callback) {
+    static void addLogCallback(QrcodeLogCallback callback) {
         if (callback != null) {
             logCallbacks.addIfAbsent(callback);
             changedListeners();
         }
     }
-    public static void removeLogCallback(QrcodeLogCallback callback) {
+    static void removeLogCallback(QrcodeLogCallback callback) {
         logCallbacks.remove(callback);
         changedListeners();
     }
-    public static void clearLogCallbacks() {
+    static void clearLogCallbacks() {
         logCallbacks.clear();
         changedListeners();
     }
-    public static void addMainThreadLogCallback(QrcodeLogCallback callback) {
+    static void addMainThreadLogCallback(QrcodeLogCallback callback) {
         if (callback != null) {
             mainThreadLogCallbacks.addIfAbsent(callback);
             changedListeners();
         }
     }
-    public static void removeMainThreadLogCallback(QrcodeLogCallback callback) {
+    static void removeMainThreadLogCallback(QrcodeLogCallback callback) {
         mainThreadLogCallbacks.remove(callback);
         changedListeners();
     }
-    public static void clearMainThreadLogCallbacks() {
+    static void clearMainThreadLogCallbacks() {
         mainThreadLogCallbacks.clear();
         changedListeners();
     }
 
-    /** Sets this Android facade's sink-local minimum level (0..4). */
-    public static int setLogLevel(int minLevel) {
-        changedLevel(minLevel);
+    static int setLogLevel(LogLevel minLevel) {
+        changedLevel(minLevel.nativeValue());
         synchronized (logLock) {
             return lastLogError;
         }

@@ -135,7 +135,7 @@ namespace ZZT.QRCode.Native
             bool entered = false;
             try
             {
-                QrcodeDetector.EnterNativeLogCallback();
+                QrcodeLog.EnterNativeLogCallback();
                 entered = true;
                 if (eventPtr == IntPtr.Zero) return;
                 NativeLogEvent nativeEvent = Marshal.PtrToStructure<NativeLogEvent>(eventPtr);
@@ -152,7 +152,7 @@ namespace ZZT.QRCode.Native
                 {
                     try
                     {
-                        QrcodeDetector.ExitNativeLogCallback();
+                        QrcodeLog.ExitNativeLogCallback();
                     }
                     catch
                     {
@@ -169,7 +169,7 @@ namespace ZZT.QRCode.Native
         {
             try
             {
-                QrcodeDetector.OnNativeLogSinkDestroyed(userData);
+                QrcodeLog.OnNativeLogSinkDestroyed(userData);
             }
             catch
             {
@@ -179,7 +179,7 @@ namespace ZZT.QRCode.Native
             {
                 try
                 {
-                    QrcodeDetector.FinalizeNativeLogSinkLifetime(userData);
+                    QrcodeLog.FinalizeNativeLogSinkLifetime(userData);
                 }
                 catch
                 {

@@ -23,11 +23,11 @@ class ExampleInstrumentedTest {
     fun directListenerReceivesInvalidHandleSynchronouslyAndDisables() {
         val callbacks = AtomicInteger()
         val callback = QrcodeLogCallback { level, _ ->
-            assertEquals(WARN, level)
+            assertEquals(LogLevel.WARN, level)
             callbacks.incrementAndGet()
         }
 
-        assertEquals(0, QrcodeLog.setMinimumLevel(WARN))
+        assertEquals(0, QrcodeLog.setMinimumLevel(LogLevel.WARN))
         QrcodeLog.add(callback)
         NativeLib.detectAndDecodePixels(0L, byteArrayOf(0), 0, 1, 1, 1)
         assertEquals(1, callbacks.get())
@@ -61,7 +61,7 @@ class ExampleInstrumentedTest {
         }
         callbackRef.set(callback)
 
-        assertEquals(0, QrcodeLog.setMinimumLevel(WARN))
+        assertEquals(0, QrcodeLog.setMinimumLevel(LogLevel.WARN))
         QrcodeLog.add(callback)
         val emitter = Thread {
             NativeLib.detectAndDecodePixels(0L, byteArrayOf(0), 0, 1, 1, 1)
@@ -89,7 +89,6 @@ class ExampleInstrumentedTest {
     }
 
     private companion object {
-        const val WARN = 3
         const val TIMEOUT_SECONDS = 10L
     }
 }
