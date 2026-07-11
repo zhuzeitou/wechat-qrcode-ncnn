@@ -68,7 +68,15 @@ typedef enum {
 } zzt_qrcode_error_t;
 
 /**
- * Log level enum for messages emitted by the C API layer.
+ * Stable log-level ABI and severity contract. A sink receives an event only
+ * when event.level >= sink.min_level.
+ *
+ * VERBOSE: internal decode phase timings.
+ * DEBUG: one successful public decode completion summary.
+ * INFO: successful detector creation and release.
+ * WARN: caller-correctable input, state, handle, index, format, stride, and
+ *       decode failures.
+ * ERROR: allocation failure and caught native exceptions.
  */
 typedef enum {
     ZZT_QRCODE_LOG_LEVEL_VERBOSE = 0,

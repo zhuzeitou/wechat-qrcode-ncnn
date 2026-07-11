@@ -344,6 +344,22 @@ zzt_qrcode_release_detector(detector);
 Native logging is opt-in and uses independent runtime sinks. Each sink has its own
 minimum level, so changing or removing one sink never changes another consumer.
 
+The level ABI is ordered `Verbose=0`, `Debug=1`, `Info=2`, `Warn=3`, and
+`Error=4`; a sink receives events at or above its configured minimum. Select
+the tier by expected volume:
+
+- `Verbose`: successful completion summaries plus internal decode-phase timings.
+- `Debug`: exactly one completion summary for each successful public decode,
+  including a valid no-QR completion with `result_count=0`.
+- `Info`: successful detector creation and release only.
+- `Warn`: caller-correctable input, state, handle, index, format, stride, and
+  decode failures.
+- `Error`: allocation failures and caught native exceptions.
+
+The default sink configuration remains `Warn`. Set `Debug` to observe ordinary
+successful decodes, or `Verbose` when per-phase timing is required.
+
+
 ```c
 #include <stdio.h>
 #include <stdlib.h>
@@ -545,10 +561,11 @@ using ZZT.QRCode;
 
 // This static facade owns an independent runtime sink while either event has handlers.
 // OnLogMessage is synchronous and may run off the Unity main thread.
-QrcodeLog.SetMinimumLogLevel(QrcodeLog.LogLevel.Warn);
+// Debug receives one normal completion per successful decode; use Verbose for phase timings.
+QrcodeLog.SetMinimumLogLevel(QrcodeLog.LogLevel.Debug);
 QrcodeLog.LogMessageHandler logHandler = (level, message) =>
 {
-    // Forward to your logging system here.
+    Debug.Log($"[QR {level}] {message}");
 };
 QrcodeLog.OnLogMessage += logHandler;
 

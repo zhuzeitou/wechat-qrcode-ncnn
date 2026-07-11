@@ -54,18 +54,30 @@ struct TimingGate {
     }
 };
 
-struct TotalDurationLogger {
-    const char* fn;
+// Severity policy mirrors the published C ABI: verbose phase timings, debug
+// successful decode completions, and info detector lifecycle transitions.
+struct DecodeOperationLogger {
+    const char* operation;
     bool enabled;
     std::chrono::steady_clock::time_point start;
-    TotalDurationLogger(const char* func, zzt_qrcode_log_level_t level) : fn(func), enabled(can_log(level)) {
+    explicit DecodeOperationLogger(const char* value)
+        : operation(value),
+          enabled(can_log(ZZT_QRCODE_LOG_LEVEL_DEBUG) || can_log(ZZT_QRCODE_LOG_LEVEL_VERBOSE)) {
         if (enabled) start = std::chrono::steady_clock::now();
     }
-    ~TotalDurationLogger() {
-        if (enabled) try {
-            zzt::qrcode::dispatch_log(g_log_context, fn, ZZT_QRCODE_LOG_LEVEL_VERBOSE, ZZT_QRCODE_OK,
-                std::string(fn) + ": total duration: " + std::to_string(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count()) + " ms");
-        } catch (...) {}
+    void complete(size_t result_count) const noexcept {
+        if (!enabled) return;
+        try {
+            zzt::qrcode::dispatch_log(
+                    g_log_context, operation, ZZT_QRCODE_LOG_LEVEL_DEBUG, ZZT_QRCODE_OK,
+                    std::string(operation) + ": completed (result_count=" + std::to_string(result_count) +
+                            ", total_duration_ms=" +
+                            std::to_string(std::chrono::duration<double, std::milli>(
+                                                   std::chrono::steady_clock::now() - start)
+                                                   .count()) +
+                            ")");
+        } catch (...) {
+        }
     }
 };
 
@@ -152,9 +164,8 @@ zzt::qrcode::LogContext result_context(zzt_qrcode_result_h result) {
     return value ? zzt::qrcode::LogContext{value->route, value->detector_id, value->result_id} : zzt::qrcode::LogContext{};
 }
 
-zzt_qrcode_error_t zzt_qrcode_create_detector_with_options(
-        const zzt_qrcode_detector_options_t* options, zzt_qrcode_detector_h* out_detector) {
-    constexpr const char* op = "zzt_qrcode_create_detector_with_options";
+static zzt_qrcode_error_t create_detector(
+        const zzt_qrcode_detector_options_t* options, zzt_qrcode_detector_h* out_detector, const char* op) {
     if (!out_detector) return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
     *out_detector = nullptr;
     zzt::qrcode::LogRoute route;
@@ -176,6 +187,13 @@ zzt_qrcode_error_t zzt_qrcode_create_detector_with_options(
     }
     try {
         *out_detector = WeChatQRCode::create_handle(route);
+        const auto context = detector_context(*out_detector);
+        try {
+            zzt::qrcode::dispatch_log(
+                    context, op, ZZT_QRCODE_LOG_LEVEL_INFO, ZZT_QRCODE_OK,
+                    std::string(op) + ": detector created");
+        } catch (...) {
+        }
         return ZZT_QRCODE_OK;
     } catch (const std::bad_alloc&) {
         zzt::qrcode::dispatch_log({route, 0, 0}, op, ZZT_QRCODE_LOG_LEVEL_ERROR, ZZT_QRCODE_ERROR_OUT_OF_MEMORY, std::string("Exception in ") + op + ": out of memory");
@@ -189,14 +207,19 @@ zzt_qrcode_error_t zzt_qrcode_create_detector_with_options(
     }
 }
 
+zzt_qrcode_error_t zzt_qrcode_create_detector_with_options(
+        const zzt_qrcode_detector_options_t* options, zzt_qrcode_detector_h* out_detector) {
+    return create_detector(options, out_detector, "zzt_qrcode_create_detector_with_options");
+}
+
 zzt_qrcode_detector_h zzt_qrcode_create_detector() {
-    LogContextScope scope({}, "zzt_qrcode_create_detector");
     zzt_qrcode_detector_h detector = nullptr;
-    return zzt_qrcode_create_detector_with_options(nullptr, &detector) == ZZT_QRCODE_OK ? detector : nullptr;
+    return create_detector(nullptr, &detector, "zzt_qrcode_create_detector") == ZZT_QRCODE_OK ? detector : nullptr;
 }
 
 zzt_qrcode_error_t zzt_qrcode_release_detector(zzt_qrcode_detector_h detector) {
-    LogContextScope log_scope(detector_context(detector), "zzt_qrcode_release_detector");
+    const auto context = detector_context(detector);
+    LogContextScope log_scope(context, "zzt_qrcode_release_detector");
     return catch_exceptions("zzt_qrcode_release_detector", [&] {
         if (detector == nullptr) {
             log_warn("zzt_qrcode_release_detector", "invalid detector handle");
@@ -206,12 +229,18 @@ zzt_qrcode_error_t zzt_qrcode_release_detector(zzt_qrcode_detector_h detector) {
             log_warn("zzt_qrcode_release_detector", "invalid detector handle");
             return ZZT_QRCODE_ERROR_INVALID_HANDLE;
         }
+        try {
+            zzt::qrcode::dispatch_log(
+                    context, "zzt_qrcode_release_detector", ZZT_QRCODE_LOG_LEVEL_INFO, ZZT_QRCODE_OK,
+                    "zzt_qrcode_release_detector: detector released");
+        } catch (...) {
+        }
         return ZZT_QRCODE_OK;
     });
 }
 
 static zzt_qrcode_error_t qrcode_detect_and_decode_internal(const char* fn, zzt_qrcode_detector_h detector, cv::Mat &img,
-                                                           zzt_qrcode_result_h *out_result) {
+                                                           zzt_qrcode_result_h *out_result, size_t* out_result_count) {
     if (out_result == nullptr) {
         log_warn(fn, "null out_result pointer");
         return ZZT_QRCODE_ERROR_INVALID_ARGUMENT;
@@ -237,8 +266,7 @@ static zzt_qrcode_error_t qrcode_detect_and_decode_internal(const char* fn, zzt_
         if (detect_timing.enabled) {
             dispatch_log(ZZT_QRCODE_LOG_LEVEL_VERBOSE,
                          std::string(fn) + ": internal detectAndDecode duration: " +
-                         std::to_string(detect_timing.elapsed_ms()) + " ms, results count: " +
-                         std::to_string(results.size()));
+                         std::to_string(detect_timing.elapsed_ms()) + " ms");
         }
     }
 
@@ -251,6 +279,7 @@ static zzt_qrcode_error_t qrcode_detect_and_decode_internal(const char* fn, zzt_
         }
     }
     *out_result = QrcodeResultList::create_handle(result_vector, detector_ptr->route, detector_ptr->detector_id);
+    *out_result_count = result_len;
     return ZZT_QRCODE_OK;
 }
 
@@ -258,7 +287,7 @@ zzt_qrcode_error_t
 zzt_qrcode_detect_and_decode_data(zzt_qrcode_detector_h detector, const unsigned char *data, int data_len,
                                   zzt_qrcode_result_h *out_result) {
     LogContextScope log_scope(detector_context(detector), "zzt_qrcode_detect_and_decode_data");
-    TotalDurationLogger total_logger("zzt_qrcode_detect_and_decode_data", ZZT_QRCODE_LOG_LEVEL_VERBOSE);
+    DecodeOperationLogger operation_logger("zzt_qrcode_detect_and_decode_data");
     return catch_exceptions("zzt_qrcode_detect_and_decode_data", [&] {
         if (out_result == nullptr) {
             log_warn("zzt_qrcode_detect_and_decode_data", "null out_result pointer");
@@ -292,7 +321,11 @@ zzt_qrcode_detect_and_decode_data(zzt_qrcode_detector_h detector, const unsigned
             return ZZT_QRCODE_ERROR_DECODE_FAILED;
         }
 
-        return qrcode_detect_and_decode_internal("zzt_qrcode_detect_and_decode_data", detector, img, out_result);
+        size_t result_count = 0;
+        const auto error = qrcode_detect_and_decode_internal(
+                "zzt_qrcode_detect_and_decode_data", detector, img, out_result, &result_count);
+        if (error == ZZT_QRCODE_OK) operation_logger.complete(result_count);
+        return error;
     });
 }
 
@@ -300,7 +333,7 @@ zzt_qrcode_error_t
 zzt_qrcode_detect_and_decode_path_u8(zzt_qrcode_detector_h detector, const char8_t *path,
                                      zzt_qrcode_result_h *out_result) {
     LogContextScope log_scope(detector_context(detector), "zzt_qrcode_detect_and_decode_path_u8");
-    TotalDurationLogger total_logger("zzt_qrcode_detect_and_decode_path_u8", ZZT_QRCODE_LOG_LEVEL_VERBOSE);
+    DecodeOperationLogger operation_logger("zzt_qrcode_detect_and_decode_path_u8");
     return catch_exceptions("zzt_qrcode_detect_and_decode_path_u8", [&] {
         if (out_result == nullptr) {
             log_warn("zzt_qrcode_detect_and_decode_path_u8", "null out_result pointer");
@@ -334,7 +367,11 @@ zzt_qrcode_detect_and_decode_path_u8(zzt_qrcode_detector_h detector, const char8
             return ZZT_QRCODE_ERROR_DECODE_FAILED;
         }
 
-        return qrcode_detect_and_decode_internal("zzt_qrcode_detect_and_decode_path_u8", detector, img, out_result);
+        size_t result_count = 0;
+        const auto error = qrcode_detect_and_decode_internal(
+                "zzt_qrcode_detect_and_decode_path_u8", detector, img, out_result, &result_count);
+        if (error == ZZT_QRCODE_OK) operation_logger.complete(result_count);
+        return error;
     });
 }
 
@@ -342,7 +379,7 @@ zzt_qrcode_error_t
 zzt_qrcode_detect_and_decode_path_u16(zzt_qrcode_detector_h detector, const char16_t *path,
                                       zzt_qrcode_result_h *out_result) {
     LogContextScope log_scope(detector_context(detector), "zzt_qrcode_detect_and_decode_path_u16");
-    TotalDurationLogger total_logger("zzt_qrcode_detect_and_decode_path_u16", ZZT_QRCODE_LOG_LEVEL_VERBOSE);
+    DecodeOperationLogger operation_logger("zzt_qrcode_detect_and_decode_path_u16");
     return catch_exceptions("zzt_qrcode_detect_and_decode_path_u16", [&] {
         if (out_result == nullptr) {
             log_warn("zzt_qrcode_detect_and_decode_path_u16", "null out_result pointer");
@@ -372,7 +409,11 @@ zzt_qrcode_detect_and_decode_path_u16(zzt_qrcode_detector_h detector, const char
             return ZZT_QRCODE_ERROR_DECODE_FAILED;
         }
 
-        return qrcode_detect_and_decode_internal("zzt_qrcode_detect_and_decode_path_u16", detector, img, out_result);
+        size_t result_count = 0;
+        const auto error = qrcode_detect_and_decode_internal(
+                "zzt_qrcode_detect_and_decode_path_u16", detector, img, out_result, &result_count);
+        if (error == ZZT_QRCODE_OK) operation_logger.complete(result_count);
+        return error;
     });
 }
 
@@ -381,7 +422,7 @@ zzt_qrcode_detect_and_decode_pixels(zzt_qrcode_detector_h detector, const unsign
                                     zzt_qrcode_pixel_format_t format, int width, int height, int stride,
                                     zzt_qrcode_result_h *out_result) {
     LogContextScope log_scope(detector_context(detector), "zzt_qrcode_detect_and_decode_pixels");
-    TotalDurationLogger total_logger("zzt_qrcode_detect_and_decode_pixels", ZZT_QRCODE_LOG_LEVEL_VERBOSE);
+    DecodeOperationLogger operation_logger("zzt_qrcode_detect_and_decode_pixels");
     return catch_exceptions("zzt_qrcode_detect_and_decode_pixels", [&] {
         if (out_result == nullptr) {
             log_warn("zzt_qrcode_detect_and_decode_pixels", "null out_result pointer");
@@ -468,7 +509,11 @@ zzt_qrcode_detect_and_decode_pixels(zzt_qrcode_detector_h detector, const unsign
             return ZZT_QRCODE_ERROR_DECODE_FAILED;
         }
 
-        return qrcode_detect_and_decode_internal("zzt_qrcode_detect_and_decode_pixels", detector, img, out_result);
+        size_t result_count = 0;
+        const auto error = qrcode_detect_and_decode_internal(
+                "zzt_qrcode_detect_and_decode_pixels", detector, img, out_result, &result_count);
+        if (error == ZZT_QRCODE_OK) operation_logger.complete(result_count);
+        return error;
     });
 }
 

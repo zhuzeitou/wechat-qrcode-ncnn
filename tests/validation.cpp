@@ -46,6 +46,13 @@ bool contains(const std::string &text, const char *needle) { return text.find(ne
 void clear(Capture &capture) { std::lock_guard<std::mutex> lock(capture.mutex); capture.events.clear(); }
 std::vector<Event> snapshot(Capture &capture) { std::lock_guard<std::mutex> lock(capture.mutex); return capture.events; }
 bool saw(Capture &capture, const char *message) { for (const Event &event : snapshot(capture)) if (contains(event.message, message)) return true; return false; }
+size_t count_events(const std::vector<Event> &events, int32_t level, const char *operation = nullptr) {
+    size_t count = 0;
+    for (const Event &event : events) {
+        if (event.level == level && (operation == nullptr || event.operation == operation)) ++count;
+    }
+    return count;
+}
 
 void ZZT_QRCODE_CALLBACK capture_log(const zzt_qrcode_log_event_t *event, void *user_data) {
     Capture *capture = static_cast<Capture *>(user_data);
@@ -290,6 +297,126 @@ int test_options_handles_and_result_lifetime() {
     return 0;
 }
 
+int test_decode_completion() {
+    Capture capture;
+    zzt_qrcode_log_sink_id_t id = 0;
+    auto sink_options = options(&capture, ZZT_QRCODE_LOG_LEVEL_DEBUG);
+    EXPECT_EQ(zzt_qrcode_add_runtime_log_sink(&sink_options, &id), ZZT_QRCODE_OK, "add DEBUG completion sink");
+    zzt_qrcode_detector_h detector = zzt_qrcode_create_detector();
+    EXPECT_TRUE(detector != nullptr, "create completion detector");
+    clear(capture);
+    const unsigned char pixels[100] = {};
+    zzt_qrcode_result_h result = nullptr;
+    EXPECT_EQ(zzt_qrcode_detect_and_decode_pixels(detector, pixels, ZZT_QRCODE_PIXEL_GRAY, 10, 10, 10, &result), ZZT_QRCODE_OK, "complete blank decode");
+    EXPECT_TRUE(result != nullptr, "blank decode result");
+    EXPECT_EQ(zzt_qrcode_release_result(result), ZZT_QRCODE_OK, "release blank decode result");
+    const auto events = snapshot(capture);
+    EXPECT_EQ(events.size(), static_cast<size_t>(1), "DEBUG receives exactly one decode event");
+    const Event &event = events.front();
+    EXPECT_EQ(event.level, ZZT_QRCODE_LOG_LEVEL_DEBUG, "completion is DEBUG");
+    EXPECT_EQ(event.error, ZZT_QRCODE_OK, "completion has OK error");
+    EXPECT_TRUE(event.detector != 0 && event.result == 0, "completion carries detector context only");
+    EXPECT_TRUE(event.operation == "zzt_qrcode_detect_and_decode_pixels", "completion names public decode operation");
+    EXPECT_TRUE(contains(event.message, "completed") && contains(event.message, "result_count=0") &&
+                        contains(event.message, "total_duration_ms="),
+                "completion includes decode summary");
+    EXPECT_EQ(zzt_qrcode_release_detector(detector), ZZT_QRCODE_OK, "release completion detector");
+    EXPECT_EQ(zzt_qrcode_remove_runtime_log_sink(id), ZZT_QRCODE_OK, "remove DEBUG completion sink");
+    return 0;
+}
+
+int test_decode_filter_boundaries() {
+    Capture verbose, debug, info, warn;
+    zzt_qrcode_log_sink_id_t verbose_id = 0, debug_id = 0, info_id = 0, warn_id = 0;
+    auto verbose_options = options(&verbose, ZZT_QRCODE_LOG_LEVEL_VERBOSE);
+    auto debug_options = options(&debug, ZZT_QRCODE_LOG_LEVEL_DEBUG);
+    auto info_options = options(&info, ZZT_QRCODE_LOG_LEVEL_INFO);
+    auto warn_options = options(&warn, ZZT_QRCODE_LOG_LEVEL_WARN);
+    EXPECT_EQ(zzt_qrcode_add_runtime_log_sink(&verbose_options, &verbose_id), ZZT_QRCODE_OK, "add VERBOSE filter sink");
+    EXPECT_EQ(zzt_qrcode_add_runtime_log_sink(&debug_options, &debug_id), ZZT_QRCODE_OK, "add DEBUG filter sink");
+    EXPECT_EQ(zzt_qrcode_add_runtime_log_sink(&info_options, &info_id), ZZT_QRCODE_OK, "add INFO filter sink");
+    EXPECT_EQ(zzt_qrcode_add_runtime_log_sink(&warn_options, &warn_id), ZZT_QRCODE_OK, "add WARN filter sink");
+    zzt_qrcode_detector_h detector = zzt_qrcode_create_detector();
+    EXPECT_TRUE(detector != nullptr, "create filter detector");
+    clear(verbose); clear(debug); clear(info); clear(warn);
+    const unsigned char pixels[100] = {};
+    zzt_qrcode_result_h result = nullptr;
+    EXPECT_EQ(zzt_qrcode_detect_and_decode_pixels(detector, pixels, ZZT_QRCODE_PIXEL_GRAY, 10, 10, 10, &result), ZZT_QRCODE_OK, "filter blank decode");
+    EXPECT_EQ(zzt_qrcode_release_result(result), ZZT_QRCODE_OK, "release filter result");
+    const auto verbose_events = snapshot(verbose);
+    const auto debug_events = snapshot(debug);
+    EXPECT_TRUE(verbose_events.size() > 1 &&
+                        count_events(verbose_events, ZZT_QRCODE_LOG_LEVEL_DEBUG,
+                                     "zzt_qrcode_detect_and_decode_pixels") == 1,
+                "VERBOSE receives completion and phase timings");
+    EXPECT_EQ(debug_events.size(), static_cast<size_t>(1), "DEBUG receives only completion");
+    EXPECT_EQ(debug_events.front().level, ZZT_QRCODE_LOG_LEVEL_DEBUG, "DEBUG event has completion severity");
+    EXPECT_TRUE(snapshot(info).empty() && snapshot(warn).empty(), "INFO and WARN receive no decode event");
+    EXPECT_EQ(zzt_qrcode_release_detector(detector), ZZT_QRCODE_OK, "release filter detector");
+    EXPECT_EQ(zzt_qrcode_remove_runtime_log_sink(verbose_id), ZZT_QRCODE_OK, "remove VERBOSE filter sink");
+    EXPECT_EQ(zzt_qrcode_remove_runtime_log_sink(debug_id), ZZT_QRCODE_OK, "remove DEBUG filter sink");
+    EXPECT_EQ(zzt_qrcode_remove_runtime_log_sink(info_id), ZZT_QRCODE_OK, "remove INFO filter sink");
+    EXPECT_EQ(zzt_qrcode_remove_runtime_log_sink(warn_id), ZZT_QRCODE_OK, "remove WARN filter sink");
+    return 0;
+}
+
+int test_detector_lifecycle() {
+    Capture info, warn, runtime, custom;
+    zzt_qrcode_log_sink_id_t info_id = 0, warn_id = 0, runtime_id = 0, custom_id = 0;
+    auto info_options = options(&info, ZZT_QRCODE_LOG_LEVEL_INFO);
+    auto warn_options = options(&warn, ZZT_QRCODE_LOG_LEVEL_WARN);
+    EXPECT_EQ(zzt_qrcode_add_runtime_log_sink(&info_options, &info_id), ZZT_QRCODE_OK, "add INFO lifecycle sink");
+    EXPECT_EQ(zzt_qrcode_add_runtime_log_sink(&warn_options, &warn_id), ZZT_QRCODE_OK, "add WARN lifecycle sink");
+    zzt_qrcode_detector_h detector = zzt_qrcode_create_detector();
+    EXPECT_TRUE(detector != nullptr, "create default lifecycle detector");
+    EXPECT_EQ(zzt_qrcode_release_detector(detector), ZZT_QRCODE_OK, "release default lifecycle detector");
+    const auto default_events = snapshot(info);
+    EXPECT_EQ(default_events.size(), static_cast<size_t>(2), "default lifecycle emits created and released");
+    EXPECT_EQ(default_events[0].level, ZZT_QRCODE_LOG_LEVEL_INFO, "create lifecycle is INFO");
+    EXPECT_EQ(default_events[1].level, ZZT_QRCODE_LOG_LEVEL_INFO, "release lifecycle is INFO");
+    EXPECT_TRUE(default_events[0].detector != 0 && default_events[0].detector == default_events[1].detector,
+                "lifecycle events retain detector ID");
+    EXPECT_TRUE(default_events[0].message == "zzt_qrcode_create_detector: detector created" &&
+                        default_events[1].message == "zzt_qrcode_release_detector: detector released",
+                "default lifecycle messages are stable");
+    EXPECT_TRUE(snapshot(warn).empty(), "WARN filters lifecycle events");
+
+    auto runtime_options = options(&runtime, ZZT_QRCODE_LOG_LEVEL_INFO);
+    EXPECT_EQ(zzt_qrcode_add_runtime_log_sink(&runtime_options, &runtime_id), ZZT_QRCODE_OK, "add lifecycle route runtime sink");
+    zzt_qrcode_logger_h logger = nullptr;
+    EXPECT_EQ(zzt_qrcode_create_logger(&logger), ZZT_QRCODE_OK, "create lifecycle custom logger");
+    auto custom_options = options(&custom, ZZT_QRCODE_LOG_LEVEL_INFO);
+    EXPECT_EQ(zzt_qrcode_logger_add_sink(logger, &custom_options, &custom_id), ZZT_QRCODE_OK, "add lifecycle custom sink");
+    zzt_qrcode_detector_options_t detector_options = ZZT_QRCODE_DETECTOR_OPTIONS_INIT;
+    detector_options.logger = logger;
+    clear(runtime); clear(custom);
+    EXPECT_EQ(zzt_qrcode_create_detector_with_options(&detector_options, &detector), ZZT_QRCODE_OK, "create custom lifecycle detector");
+    EXPECT_EQ(zzt_qrcode_release_detector(detector), ZZT_QRCODE_OK, "release custom lifecycle detector");
+    EXPECT_EQ(snapshot(custom).size(), static_cast<size_t>(2), "custom route receives lifecycle events");
+    EXPECT_TRUE(snapshot(runtime).empty(), "custom route suppresses runtime lifecycle without propagation");
+    detector_options.log_flags = ZZT_QRCODE_DETECTOR_LOG_PROPAGATE_TO_RUNTIME;
+    clear(runtime); clear(custom);
+    EXPECT_EQ(zzt_qrcode_create_detector_with_options(&detector_options, &detector), ZZT_QRCODE_OK, "create propagated lifecycle detector");
+    EXPECT_EQ(zzt_qrcode_release_detector(detector), ZZT_QRCODE_OK, "release propagated lifecycle detector");
+    EXPECT_EQ(snapshot(custom).size(), static_cast<size_t>(2), "custom route receives propagated lifecycle events");
+    EXPECT_EQ(snapshot(runtime).size(), static_cast<size_t>(2), "runtime receives propagated lifecycle events");
+
+    clear(info); clear(warn);
+    EXPECT_EQ(zzt_qrcode_release_detector(nullptr), ZZT_QRCODE_ERROR_INVALID_HANDLE, "reject invalid lifecycle release");
+    EXPECT_TRUE(!snapshot(warn).empty(), "invalid release remains a WARN");
+    for (const Event &event : snapshot(info)) {
+        EXPECT_TRUE(event.level != ZZT_QRCODE_LOG_LEVEL_INFO ||
+                            !contains(event.message, "zzt_qrcode_release_detector: detector released"),
+                    "invalid release never emits lifecycle completion");
+    }
+    EXPECT_EQ(zzt_qrcode_logger_remove_sink(logger, custom_id), ZZT_QRCODE_OK, "remove lifecycle custom sink");
+    EXPECT_EQ(zzt_qrcode_release_logger(logger), ZZT_QRCODE_OK, "release lifecycle custom logger");
+    EXPECT_EQ(zzt_qrcode_remove_runtime_log_sink(runtime_id), ZZT_QRCODE_OK, "remove lifecycle route runtime sink");
+    EXPECT_EQ(zzt_qrcode_remove_runtime_log_sink(warn_id), ZZT_QRCODE_OK, "remove WARN lifecycle sink");
+    EXPECT_EQ(zzt_qrcode_remove_runtime_log_sink(info_id), ZZT_QRCODE_OK, "remove INFO lifecycle sink");
+    return 0;
+}
+
 int test_timing_and_privacy() {
     Capture capture;
     zzt_qrcode_log_sink_id_t id = 0;
@@ -302,14 +429,27 @@ int test_timing_and_privacy() {
     if (result != nullptr) zzt_qrcode_release_result(result);
     const char *path = "SENTINEL_PATH_xyz_123_SECRET";
     EXPECT_EQ(zzt_qrcode_detect_and_decode_path_u8(detector, reinterpret_cast<const char8_t *>(path), &result), ZZT_QRCODE_ERROR_DECODE_FAILED, "timed invalid path");
+    const unsigned char encoded[] = "SENTINEL_RAW_QR_TEXT_456_SECRET";
+    EXPECT_EQ(zzt_qrcode_detect_and_decode_data(detector, encoded, static_cast<int>(sizeof(encoded)), &result), ZZT_QRCODE_ERROR_DECODE_FAILED, "timed invalid raw data");
     const auto events = snapshot(capture);
-    bool timing = false;
+    bool phase_timing = false;
+    bool completion = false;
     for (const Event &event : events) {
-        if (event.level == ZZT_QRCODE_LOG_LEVEL_VERBOSE) { timing = true; EXPECT_TRUE(event.error == ZZT_QRCODE_OK, "timing event has OK error"); }
+        if (event.level == ZZT_QRCODE_LOG_LEVEL_VERBOSE) {
+            phase_timing = true;
+            EXPECT_TRUE(event.error == ZZT_QRCODE_OK, "phase timing event has OK error");
+        }
+        if (event.operation == "zzt_qrcode_detect_and_decode_pixels" &&
+                event.level == ZZT_QRCODE_LOG_LEVEL_DEBUG) {
+            completion = contains(event.message, "completed") && contains(event.message, "result_count=0") &&
+                         contains(event.message, "total_duration_ms=");
+        }
+        EXPECT_TRUE(!contains(event.message, "total duration:"), "legacy total duration message is absent");
         EXPECT_TRUE(!contains(event.message, path), "path sentinel does not leak");
+        EXPECT_TRUE(!contains(event.message, "SENTINEL_RAW_QR_TEXT_456_SECRET"), "raw input does not leak");
         EXPECT_TRUE(!event.operation.empty(), "operation is populated");
     }
-    EXPECT_TRUE(timing && saw(capture, "total duration"), "verbose timing events are captured");
+    EXPECT_TRUE(phase_timing && completion, "verbose captures phase timings and DEBUG completion");
     EXPECT_EQ(zzt_qrcode_release_detector(detector), ZZT_QRCODE_OK, "release timing detector");
     EXPECT_EQ(zzt_qrcode_remove_runtime_log_sink(id), ZZT_QRCODE_OK, "remove timing sink");
     return 0;
@@ -322,6 +462,9 @@ int main() {
     if (int result = test_quiescent_removal_and_reentry()) return result;
     if (int result = test_nested_and_routes()) return result;
     if (int result = test_options_handles_and_result_lifetime()) return result;
+    if (int result = test_decode_completion()) return result;
+    if (int result = test_decode_filter_boundaries()) return result;
+    if (int result = test_detector_lifecycle()) return result;
     if (int result = test_timing_and_privacy()) return result;
     std::cout << "All structured logger validation tests passed successfully!\n";
     return 0;
